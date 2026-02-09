@@ -1,7 +1,7 @@
 import { useEffect, useState, useCallback } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { useSession } from '../../contexts/SessionContext';
-import { getPollByCode, getQuestionsForPoll, getResponseCounts, subscribeToQuestions, subscribeToPollState, subscribeToResponses } from '../../services/supabase';
+import { getPollByCode, getQuestionsForPoll, getResponseCounts, subscribeToQuestions, subscribeToPollState } from '../../services/supabase';
 import { verifyPollPassword } from '../../services/api';
 import { Loading } from '../common/Loading';
 import { PasswordModal } from '../common/PasswordModal';
