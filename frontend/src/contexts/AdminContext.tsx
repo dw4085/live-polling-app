@@ -88,6 +88,9 @@ export function AdminProvider({ children }: { children: ReactNode }) {
         }
       } catch (error) {
         console.error('Auth check failed:', error);
+        // Clear potentially stale auth data
+        localStorage.removeItem('admin_token');
+        await supabase.auth.signOut();
       } finally {
         setLoading(false);
       }
@@ -218,6 +221,11 @@ export function AdminProvider({ children }: { children: ReactNode }) {
   // Logout
   const logout = useCallback(async () => {
     localStorage.removeItem('admin_token');
+    // Clear all Supabase auth data
+    const keysToRemove = Object.keys(localStorage).filter(key =>
+      key.startsWith('sb-') || key.includes('supabase')
+    );
+    keysToRemove.forEach(key => localStorage.removeItem(key));
     await supabase.auth.signOut();
     setAdmin(null);
     setIsAuthenticated(false);
