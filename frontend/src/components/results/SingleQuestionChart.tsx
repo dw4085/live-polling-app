@@ -107,7 +107,7 @@ function CustomXAxisTick({ x, y, payload, baseSize }: any) {
 }
 
 // Custom label for pie chart
-function renderPieLabel({ cx, cy, midAngle, innerRadius, outerRadius, name, percent }: any) {
+function renderPieLabel({ cx, cy, midAngle, outerRadius, name, percent }: any) {
   const RADIAN = Math.PI / 180;
   const radius = outerRadius * 1.2;
   const x = cx + radius * Math.cos(-midAngle * RADIAN);
