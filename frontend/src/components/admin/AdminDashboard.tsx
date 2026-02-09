@@ -106,7 +106,10 @@ export function AdminDashboard() {
       {/* Header */}
       <header className="bg-navy text-white py-4 px-6 shadow-lg">
         <div className="max-w-6xl mx-auto flex items-center justify-between">
-          <h1 className="text-xl font-semibold">Live Polling Admin</h1>
+          <div>
+            <h1 className="text-xl font-semibold">PollAnywhere</h1>
+            <p className="text-columbia-blue text-xs">Technology Strategy, Columbia Business School</p>
+          </div>
           <button
             onClick={logout}
             className="text-columbia-blue hover:text-white transition-colors"

@@ -39,8 +39,9 @@ export function AdminLogin() {
     <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-navy to-navy-dark">
       <div className="bg-white rounded-2xl shadow-2xl p-8 max-w-md w-full mx-4">
         <div className="text-center mb-8">
-          <h1 className="text-3xl font-bold text-navy mb-2">Live Polling</h1>
-          <p className="text-gray-500">Admin Login</p>
+          <h1 className="text-3xl font-bold text-navy mb-2">PollAnywhere</h1>
+          <p className="text-gray-500 text-sm">Designed for Technology Strategy at Columbia Business School, Spring 2026</p>
+          <p className="text-gray-400 text-sm mt-4">Admin Login</p>
         </div>
 
         <form onSubmit={handleSubmit}>

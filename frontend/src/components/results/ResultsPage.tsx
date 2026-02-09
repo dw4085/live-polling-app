@@ -128,9 +128,13 @@ export function ResultsPage() {
       <header className={`bg-navy text-white py-4 px-6 ${presentationMode ? 'py-6' : ''}`}>
         <div className="max-w-6xl mx-auto flex items-center justify-between">
           <div>
-            <h1 className={`font-semibold ${presentationMode ? 'text-3xl' : 'text-xl'}`}>
-              {poll?.title}
-            </h1>
+            <div className="flex items-center gap-2 mb-1">
+              <span className={`text-columbia-blue font-medium ${presentationMode ? 'text-xl' : 'text-sm'}`}>PollAnywhere</span>
+              <span className="text-gray-400">|</span>
+              <h1 className={`font-semibold ${presentationMode ? 'text-3xl' : 'text-xl'}`}>
+                {poll?.title}
+              </h1>
+            </div>
             <p className="text-columbia-blue text-sm">
               {totalResponses} response{totalResponses !== 1 ? 's' : ''}
             </p>

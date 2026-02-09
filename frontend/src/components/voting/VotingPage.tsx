@@ -161,7 +161,13 @@ export function VotingPage() {
       {/* Header */}
       <header className="bg-navy text-white py-4 px-6 sticky top-0 z-10">
         <div className="max-w-2xl mx-auto flex items-center justify-between">
-          <h1 className="text-xl font-semibold truncate">{poll?.title}</h1>
+          <div className="min-w-0 flex-1">
+            <div className="flex items-center gap-2">
+              <span className="text-columbia-blue text-sm font-medium">PollAnywhere</span>
+              <span className="text-gray-400">|</span>
+              <h1 className="text-lg font-semibold truncate">{poll?.title}</h1>
+            </div>
+          </div>
           <ProgressIndicator answered={answeredCount} total={totalQuestions} />
         </div>
       </header>

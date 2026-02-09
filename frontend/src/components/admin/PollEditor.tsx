@@ -211,8 +211,9 @@ export function PollEditor() {
       <header className="bg-navy text-white py-4 px-6 shadow-lg">
         <div className="max-w-6xl mx-auto flex items-center justify-between">
           <div className="flex items-center gap-4">
-            <Link to="/admin/dashboard" className="text-columbia-blue hover:text-white">
-              ← Back
+            <Link to="/admin/dashboard" className="text-columbia-blue hover:text-white flex items-center gap-2">
+              <span>←</span>
+              <span className="font-medium">PollAnywhere</span>
             </Link>
             {editingTitle ? (
               <div className="flex items-center gap-2">
