@@ -123,8 +123,12 @@ export function VotingPage() {
     return false;
   }, [poll]);
 
-  const answeredCount = Object.keys(responses).length;
-  const totalQuestions = questions.length;
+  // Filter to only show visible questions
+  const visibleQuestions = questions.filter(q => q.is_visible);
+
+  // Count answered among visible questions only
+  const answeredCount = visibleQuestions.filter(q => responses[q.id]).length;
+  const totalQuestions = visibleQuestions.length;
   const allAnswered = answeredCount === totalQuestions && totalQuestions > 0;
 
   // Helper to get response counts for a specific question
@@ -176,13 +180,19 @@ export function VotingPage() {
 
       {/* Questions */}
       <main className="max-w-2xl mx-auto p-4 pb-24">
-        {questions.length === 0 ? (
-          <div className="text-center py-12 text-gray-500">
-            No questions yet. Please wait for the administrator.
+        {visibleQuestions.length === 0 ? (
+          <div className="text-center py-16">
+            <div className="text-6xl mb-4 animate-pulse">⏳</div>
+            <h2 className="text-xl font-semibold text-gray-700 mb-2">Waiting for Questions</h2>
+            <p className="text-gray-500">
+              The administrator will reveal questions shortly.
+              <br />
+              Please keep this page open.
+            </p>
           </div>
         ) : (
           <div className="space-y-6">
-            {questions.map((question, index) => (
+            {visibleQuestions.map((question, index) => (
               <div key={question.id} className="space-y-4">
                 <QuestionCard
                   question={question}

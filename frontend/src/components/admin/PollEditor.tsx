@@ -180,6 +180,17 @@ export function PollEditor() {
     );
   };
 
+  const handleToggleVisibility = async (questionId: string, isVisible: boolean) => {
+    await supabase
+      .from('questions')
+      .update({ is_visible: isVisible })
+      .eq('id', questionId);
+
+    setQuestions(prev =>
+      prev.map(q => q.id === questionId ? { ...q, is_visible: isVisible } : q)
+    );
+  };
+
   const handleRevealAll = async (reveal: boolean) => {
     if (!poll) return;
     const { data, error } = await supabase
@@ -192,6 +203,21 @@ export function PollEditor() {
     if (data && !error) {
       setPoll(data);
     }
+  };
+
+  const handleShowAllQuestions = async (visible: boolean) => {
+    if (!poll) return;
+    const questionIds = questions.map(q => q.id);
+    if (questionIds.length === 0) return;
+
+    await supabase
+      .from('questions')
+      .update({ is_visible: visible })
+      .in('id', questionIds);
+
+    setQuestions(prev =>
+      prev.map(q => ({ ...q, is_visible: visible }))
+    );
   };
 
   const votingUrl = poll ? `${window.location.origin}/vote/${poll.slug || poll.access_code}` : '';
@@ -267,6 +293,18 @@ export function PollEditor() {
 
             {/* Actions */}
             <div className="flex items-center gap-3">
+              <button
+                onClick={() => handleShowAllQuestions(true)}
+                className="px-4 py-2 bg-blue-100 text-blue-700 rounded-lg text-sm font-medium hover:bg-blue-200 transition-colors"
+              >
+                Show All
+              </button>
+              <button
+                onClick={() => handleShowAllQuestions(false)}
+                className="px-4 py-2 bg-gray-100 text-gray-600 rounded-lg text-sm font-medium hover:bg-gray-200 transition-colors"
+              >
+                Hide All
+              </button>
               <button
                 onClick={() => handleRevealAll(!poll.results_revealed)}
                 className={`px-4 py-2 rounded-lg text-sm font-medium transition-colors ${
@@ -361,6 +399,7 @@ export function PollEditor() {
                   onUpdate={(updates) => handleQuestionUpdate(question.id, updates)}
                   onDelete={() => handleQuestionDelete(question.id)}
                   onReveal={(reveal) => handleRevealQuestion(question.id, reveal)}
+                  onToggleVisibility={(visible) => handleToggleVisibility(question.id, visible)}
                 />
               ))}
           </div>

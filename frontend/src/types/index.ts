@@ -42,6 +42,7 @@ export interface Question {
   question_order: number;
   chart_type: ChartType;
   is_revealed: boolean;
+  is_visible: boolean;
   created_at: string;
   updated_at: string;
   answer_options?: AnswerOption[];

@@ -8,6 +8,7 @@ interface QuestionEditorProps {
   onUpdate: (updates: Partial<Question>) => void;
   onDelete: () => void;
   onReveal: (reveal: boolean) => void;
+  onToggleVisibility: (visible: boolean) => void;
 }
 
 const CHART_TYPES: { value: ChartType; label: string }[] = [
@@ -22,7 +23,8 @@ export function QuestionEditor({
   questionNumber,
   onUpdate,
   onDelete,
-  onReveal
+  onReveal,
+  onToggleVisibility
 }: QuestionEditorProps) {
   const [isExpanded, setIsExpanded] = useState(false);
   const [editingText, setEditingText] = useState(false);
@@ -147,12 +149,25 @@ export function QuestionEditor({
         {/* Action buttons */}
         <div className="flex items-center gap-2">
           <button
+            onClick={() => onToggleVisibility(!question.is_visible)}
+            className={`px-3 py-1 rounded text-sm font-medium transition-colors ${
+              question.is_visible
+                ? 'bg-blue-100 text-blue-700'
+                : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
+            }`}
+            title={question.is_visible ? 'Click to hide from users' : 'Click to show to users'}
+          >
+            {question.is_visible ? '👁 Visible' : '👁‍🗨 Hidden'}
+          </button>
+
+          <button
             onClick={() => onReveal(!question.is_revealed)}
             className={`px-3 py-1 rounded text-sm font-medium transition-colors ${
               question.is_revealed
                 ? 'bg-green-100 text-green-700'
                 : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
             }`}
+            title={question.is_revealed ? 'Results are shown' : 'Click to reveal results'}
           >
             {question.is_revealed ? '✓ Revealed' : 'Reveal'}
           </button>
