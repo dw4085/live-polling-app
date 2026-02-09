@@ -22,7 +22,7 @@ export function VotingPage() {
   const [showPasswordModal, setShowPasswordModal] = useState(false);
   const [passwordVerified, setPasswordVerified] = useState(false);
   const [responseCounts, setResponseCounts] = useState<ResponseCount[]>([]);
-  const [collapsedResults, setCollapsedResults] = useState<Record<string, boolean>>({});
+  const [expandedResults, setExpandedResults] = useState<Record<string, boolean>>({});
 
   // Load poll data
   useEffect(() => {
@@ -129,8 +129,8 @@ export function VotingPage() {
     return false;
   }, [poll]);
 
-  const toggleResultsCollapse = (questionId: string) => {
-    setCollapsedResults(prev => ({
+  const toggleResultsExpand = (questionId: string) => {
+    setExpandedResults(prev => ({
       ...prev,
       [questionId]: !prev[questionId]
     }));
@@ -216,11 +216,11 @@ export function VotingPage() {
                 {poll?.results_revealed && (
                   <div className="animate-fade-in">
                     <button
-                      onClick={() => toggleResultsCollapse(question.id)}
+                      onClick={() => toggleResultsExpand(question.id)}
                       className="w-full text-sm text-gray-500 flex items-center gap-2 hover:text-gray-700 transition-colors py-2"
                     >
                       <svg
-                        className={`w-4 h-4 transition-transform ${collapsedResults[question.id] ? '' : 'rotate-90'}`}
+                        className={`w-4 h-4 transition-transform ${expandedResults[question.id] ? 'rotate-90' : ''}`}
                         fill="none"
                         stroke="currentColor"
                         viewBox="0 0 24 24"
@@ -230,10 +230,10 @@ export function VotingPage() {
                       <span>📊</span>
                       <span>Live results from all participants</span>
                       <span className="text-xs text-gray-400">
-                        ({collapsedResults[question.id] ? 'click to expand' : 'click to collapse'})
+                        ({expandedResults[question.id] ? 'click to collapse' : 'click to expand'})
                       </span>
                     </button>
-                    {!collapsedResults[question.id] && (
+                    {expandedResults[question.id] && (
                       <SingleQuestionChart
                         question={question}
                         results={getResultsForQuestion(question.id)}
