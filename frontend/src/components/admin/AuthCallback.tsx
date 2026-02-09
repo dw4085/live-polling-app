@@ -8,51 +8,72 @@ export function AuthCallback() {
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    async function handleCallback() {
-      // Get the session from the URL hash
-      const { data: { session }, error: sessionError } = await supabase.auth.getSession();
-
-      if (sessionError) {
-        setError(sessionError.message);
-        return;
-      }
-
-      if (!session?.user) {
-        setError('No session found. Please try logging in again.');
-        return;
-      }
-
-      // Link auth user to admin record if not already linked
-      const { data: adminData, error: fetchError } = await supabase
-        .from('admins')
-        .select('*')
-        .eq('email', session.user.email)
-        .single();
-
-      if (fetchError || !adminData) {
-        setError('No admin account found for this email.');
-        return;
-      }
-
-      // Update auth_user_id if not set
-      if (!adminData.auth_user_id) {
-        await supabase
+    // Listen for auth state change (triggered when magic link tokens are exchanged)
+    const { data: { subscription } } = supabase.auth.onAuthStateChange(async (event, session) => {
+      if (event === 'SIGNED_IN' && session?.user) {
+        // Link auth user to admin record if not already linked
+        const { data: adminData, error: fetchError } = await supabase
           .from('admins')
-          .update({ auth_user_id: session.user.id })
-          .eq('id', adminData.id);
-      }
+          .select('*')
+          .eq('email', session.user.email)
+          .single();
 
-      // Redirect based on admin status
-      if (adminData.status === 'pending') {
-        navigate('/admin/pending');
-      } else if (adminData.status === 'approved') {
-        navigate('/admin/dashboard');
-      } else {
-        setError('Your account request was not approved.');
-      }
-    }
+        if (fetchError || !adminData) {
+          setError('No admin account found for this email.');
+          return;
+        }
 
-    handleCallback();
+        // Update auth_user_id if not set
+        if (!adminData.auth_user_id) {
+          await supabase
+            .from('admins')
+            .update({ auth_user_id: session.user.id })
+            .eq('id', adminData.id);
+        }
+
+        // Redirect based on admin status
+        if (adminData.status === 'pending') {
+          navigate('/admin/pending');
+        } else if (adminData.status === 'approved') {
+          navigate('/admin/dashboard');
+        } else {
+          setError('Your account request was not approved.');
+        }
+      }
+    });
+
+    // Also check if we already have a session (in case the event already fired)
+    supabase.auth.getSession().then(async ({ data: { session } }) => {
+      if (session?.user) {
+        const { data: adminData, error: fetchError } = await supabase
+          .from('admins')
+          .select('*')
+          .eq('email', session.user.email)
+          .single();
+
+        if (fetchError || !adminData) {
+          setError('No admin account found for this email.');
+          return;
+        }
+
+        if (!adminData.auth_user_id) {
+          await supabase
+            .from('admins')
+            .update({ auth_user_id: session.user.id })
+            .eq('id', adminData.id);
+        }
+
+        if (adminData.status === 'pending') {
+          navigate('/admin/pending');
+        } else if (adminData.status === 'approved') {
+          navigate('/admin/dashboard');
+        } else {
+          setError('Your account request was not approved.');
+        }
+      }
+    });
+
+    return () => subscription.unsubscribe();
   }, [navigate]);
 
   if (error) {

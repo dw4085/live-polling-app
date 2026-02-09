@@ -44,22 +44,9 @@ UPDATE polls SET admin_id = (SELECT id FROM admins WHERE role = 'superadmin' LIM
 -- ============================================
 ALTER TABLE admins ENABLE ROW LEVEL SECURITY;
 
--- Admins can read their own record
-CREATE POLICY "Admins can read own record" ON admins
-    FOR SELECT USING (
-        auth.uid() = auth_user_id
-        OR auth.role() = 'service_role'
-    );
-
--- Superadmins can read all admin records
-CREATE POLICY "Superadmins can read all admins" ON admins
-    FOR SELECT USING (
-        EXISTS (
-            SELECT 1 FROM admins a
-            WHERE a.auth_user_id = auth.uid()
-            AND a.role = 'superadmin'
-        )
-    );
+-- Allow reading admin records (needed for login lookups)
+CREATE POLICY "Allow reading admins" ON admins
+    FOR SELECT USING (true);
 
 -- Allow insert for new signups (auth user can create their own record)
 CREATE POLICY "Users can create own admin record" ON admins
