@@ -63,7 +63,7 @@ export function VotingPage() {
     loadPoll();
   }, [code, passwordVerified, initSession]);
 
-  // Subscribe to real-time updates
+  // Subscribe to real-time updates and poll for changes
   useEffect(() => {
     if (!poll) return;
 
@@ -84,41 +84,31 @@ export function VotingPage() {
       if (updatedPoll.state === 'closed') {
         setError('This poll has ended');
       }
-      // Immediately fetch response counts when results are revealed
-      if (updatedPoll.results_revealed) {
-        const counts = await getResponseCounts(updatedPoll.id);
-        setResponseCounts(counts);
-      }
     });
 
+    // Poll for poll state and response counts every second (more reliable than subscriptions)
+    const interval = setInterval(async () => {
+      // Refetch poll to check for results_revealed changes
+      const pollData = await getPollByCode(code!);
+      if (pollData) {
+        setPoll(pollData);
+        if (pollData.state === 'closed') {
+          setError('This poll has ended');
+        }
+        // Fetch response counts if results are revealed
+        if (pollData.results_revealed) {
+          const counts = await getResponseCounts(pollData.id);
+          setResponseCounts(counts);
+        }
+      }
+    }, 1000);
+
     return () => {
+      clearInterval(interval);
       questionsSub.unsubscribe();
       pollSub.unsubscribe();
     };
-  }, [poll?.id]);
-
-  // Fetch and subscribe to response counts when results are revealed
-  useEffect(() => {
-    if (!poll || !poll.results_revealed) return;
-
-    // Initial fetch of response counts
-    async function loadCounts() {
-      const counts = await getResponseCounts(poll!.id);
-      setResponseCounts(counts);
-    }
-    loadCounts();
-
-    // Subscribe to response changes for real-time updates
-    const responsesSub = subscribeToResponses(poll.id, async () => {
-      // Refetch counts when any response changes
-      const counts = await getResponseCounts(poll!.id);
-      setResponseCounts(counts);
-    });
-
-    return () => {
-      responsesSub.unsubscribe();
-    };
-  }, [poll?.id, poll?.results_revealed]);
+  }, [poll?.id, code]);
 
   const handlePasswordSubmit = useCallback(async (password: string): Promise<boolean> => {
     if (!poll) return false;
