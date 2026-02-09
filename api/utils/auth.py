@@ -19,13 +19,15 @@ JWT_EXPIRY_HOURS = 24
 
 
 def verify_admin_password(password: str) -> bool:
-    """Verify the admin master password."""
+    """Verify the admin master password using SHA256 hash."""
     stored_hash = os.environ.get("ADMIN_PASSWORD_HASH")
     if not stored_hash:
         # In development, allow a default password
         return password == "admin"
 
-    return bcrypt.checkpw(password.encode(), stored_hash.encode())
+    # Use SHA256 for admin password (produces alphanumeric hex string)
+    password_hash = hashlib.sha256(password.encode()).hexdigest()
+    return password_hash == stored_hash
 
 
 def create_admin_token() -> str:
