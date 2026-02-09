@@ -23,6 +23,7 @@ const COLORS = ['#E8702A', '#0EA7B5', '#FFBE4F', '#9B5DE5', '#00F5D4', '#FE6D73'
 
 interface CrossTabData {
   name: string;
+  fullName: string;
   [key: string]: string | number;
 }
 
@@ -33,13 +34,107 @@ interface CombinationData {
   color: string;
 }
 
+// Calculate font size based on text length
+function getFontSize(text: string, baseSize: number): number {
+  const length = text.length;
+  if (length <= 15) return baseSize;
+  if (length <= 30) return Math.max(baseSize - 2, 10);
+  if (length <= 50) return Math.max(baseSize - 4, 9);
+  return Math.max(baseSize - 5, 8);
+}
+
+// Wrap text at word boundaries
+function wrapText(text: string, maxCharsPerLine: number): string[] {
+  const words = text.split(' ');
+  const lines: string[] = [];
+  let currentLine = '';
+
+  words.forEach(word => {
+    if (currentLine.length === 0) {
+      currentLine = word;
+    } else if ((currentLine + ' ' + word).length <= maxCharsPerLine) {
+      currentLine += ' ' + word;
+    } else {
+      lines.push(currentLine);
+      currentLine = word;
+    }
+  });
+
+  if (currentLine) {
+    lines.push(currentLine);
+  }
+
+  return lines;
+}
+
+// Custom Y-axis tick for horizontal bar chart (combinations)
+function CustomYAxisTick({ x, y, payload, baseSize }: any) {
+  const text = payload.value;
+  const fontSize = getFontSize(text, baseSize);
+  const lines = wrapText(text, 25);
+  const lineHeight = fontSize + 2;
+  const startY = y - ((lines.length - 1) * lineHeight) / 2;
+
+  return (
+    <g>
+      {lines.map((line, index) => (
+        <text
+          key={index}
+          x={x - 5}
+          y={startY + index * lineHeight}
+          textAnchor="end"
+          fontSize={fontSize}
+          fill="#374151"
+          dominantBaseline="middle"
+        >
+          {line}
+        </text>
+      ))}
+    </g>
+  );
+}
+
+// Custom X-axis tick for vertical/grouped bar chart
+function CustomXAxisTick({ x, y, payload, baseSize }: any) {
+  const text = payload.value;
+  const fontSize = getFontSize(text, baseSize);
+  const lines = wrapText(text, 12);
+  const lineHeight = fontSize + 2;
+
+  return (
+    <g>
+      {lines.map((line, index) => (
+        <text
+          key={index}
+          x={x}
+          y={y + 10 + index * lineHeight}
+          textAnchor="middle"
+          fontSize={fontSize}
+          fill="#374151"
+        >
+          {line}
+        </text>
+      ))}
+    </g>
+  );
+}
+
+// Custom legend formatter
+function renderLegendText(value: string) {
+  const fontSize = getFontSize(value, 12);
+  return <span style={{ fontSize, color: '#374151' }}>{value}</span>;
+}
+
 // Custom tooltip for grouped bar chart
 function GroupedTooltip({ active, payload, label, totalRespondents }: any) {
   if (!active || !payload || !payload.length) return null;
 
+  // Find the full name from the first payload
+  const fullLabel = payload[0]?.payload?.fullName || label;
+
   return (
-    <div className="bg-white border border-gray-200 shadow-lg rounded-lg p-3">
-      <p className="font-medium text-gray-900 mb-2">{label}</p>
+    <div className="bg-white border border-gray-200 shadow-lg rounded-lg p-3 max-w-sm">
+      <p className="font-medium text-gray-900 mb-2">{fullLabel}</p>
       {payload.map((entry: any, index: number) => {
         const count = entry.value;
         const percentage = totalRespondents > 0 ? ((count / totalRespondents) * 100).toFixed(1) : 0;
@@ -62,7 +157,7 @@ function CombinationTooltip({ active, payload, totalRespondents }: any) {
   const percentage = totalRespondents > 0 ? ((count / totalRespondents) * 100).toFixed(1) : 0;
 
   return (
-    <div className="bg-white border border-gray-200 shadow-lg rounded-lg p-3">
+    <div className="bg-white border border-gray-200 shadow-lg rounded-lg p-3 max-w-sm">
       <p className="font-medium text-gray-900 mb-1">{data.fullName}</p>
       <p className="text-gray-600">
         Count: <span className="font-semibold">{count}</span>
@@ -99,7 +194,7 @@ export function CrossTabChart({
   }, [question1.id, question2.id]);
 
   // Build cross-tabulation matrix
-  const { groupedData, combinationData, totalRespondents } = useMemo(() => {
+  const { groupedData, combinationData, totalRespondents, maxLabelLength } = useMemo(() => {
     const q1Options = question1.answer_options || [];
     const q2Options = question2.answer_options || [];
 
@@ -137,12 +232,17 @@ export function CrossTabChart({
       }
     });
 
-    // Format for grouped bar chart
+    // Calculate max label length for sizing
+    const allLabels = [...q1Options.map(o => o.option_text), ...q2Options.map(o => o.option_text)];
+    const maxLabelLength = Math.max(...allLabels.map(l => l.length), 0);
+
+    // Format for grouped bar chart (full labels)
     const groupedData: CrossTabData[] = q1Options
       .sort((a, b) => a.option_order - b.option_order)
       .map(o1 => {
         const row: CrossTabData = {
-          name: o1.option_text.length > 15 ? o1.option_text.substring(0, 15) + '...' : o1.option_text
+          name: o1.option_text,
+          fullName: o1.option_text
         };
         q2Options.forEach((o2) => {
           row[o2.option_text] = matrix[o1.id][o2.id];
@@ -150,7 +250,7 @@ export function CrossTabChart({
         return row;
       });
 
-    // Format for combination bar chart
+    // Format for combination bar chart (full labels)
     const combinationData: CombinationData[] = [];
     let colorIndex = 0;
     q1Options
@@ -160,10 +260,8 @@ export function CrossTabChart({
           .sort((a, b) => a.option_order - b.option_order)
           .forEach(o2 => {
             const count = matrix[o1.id][o2.id];
-            const q1Short = o1.option_text.length > 10 ? o1.option_text.substring(0, 10) + '...' : o1.option_text;
-            const q2Short = o2.option_text.length > 10 ? o2.option_text.substring(0, 10) + '...' : o2.option_text;
             combinationData.push({
-              name: `${q1Short} + ${q2Short}`,
+              name: `${o1.option_text} + ${o2.option_text}`,
               fullName: `${o1.option_text} + ${o2.option_text}`,
               count: count,
               color: COLORS[colorIndex % COLORS.length]
@@ -175,11 +273,18 @@ export function CrossTabChart({
     // Sort combination data by count descending
     combinationData.sort((a, b) => b.count - a.count);
 
-    return { groupedData, combinationData, totalRespondents };
+    return { groupedData, combinationData, totalRespondents, maxLabelLength };
   }, [responses, question1, question2]);
 
-  const chartHeight = presentationMode ? 400 : 300;
-  const fontSize = presentationMode ? 14 : 12;
+  const baseFontSize = presentationMode ? 14 : 12;
+
+  // Dynamic chart height based on content
+  const numCombinations = combinationData.length;
+  const baseHeight = presentationMode ? 400 : 300;
+  const combinationHeight = Math.max(baseHeight, numCombinations * (maxLabelLength > 30 ? 50 : 40));
+
+  // Dynamic Y-axis width for combination chart
+  const yAxisWidth = Math.min(250, Math.max(150, maxLabelLength * 4));
 
   if (loading) {
     return (
@@ -220,7 +325,7 @@ export function CrossTabChart({
             Cross-Tabulation
           </h3>
           <p className="text-sm text-gray-500 mt-1">
-            {question1.question_text.substring(0, 40)}... × {question2.question_text.substring(0, 40)}...
+            {question1.question_text} × {question2.question_text}
           </p>
           <p className="text-sm text-gray-400 mt-1">
             {totalRespondents} respondent{totalRespondents !== 1 ? 's' : ''} answered both questions
@@ -251,16 +356,17 @@ export function CrossTabChart({
       </div>
 
       {viewMode === 'grouped' ? (
-        <ResponsiveContainer width="100%" height={chartHeight}>
-          <BarChart data={groupedData} margin={{ bottom: 50 }}>
+        <ResponsiveContainer width="100%" height={baseHeight + (maxLabelLength > 20 ? 50 : 0)}>
+          <BarChart data={groupedData} margin={{ bottom: maxLabelLength > 30 ? 100 : 60, left: 10, right: 10 }}>
             <XAxis
               dataKey="name"
-              tick={{ fontSize }}
-              height={80}
+              tick={<CustomXAxisTick baseSize={baseFontSize} />}
+              height={maxLabelLength > 30 ? 100 : 60}
+              interval={0}
             />
-            <YAxis tick={{ fontSize }} />
+            <YAxis tick={{ fontSize: baseFontSize }} />
             <Tooltip content={<GroupedTooltip totalRespondents={totalRespondents} />} />
-            <Legend />
+            <Legend formatter={renderLegendText} />
             {(question2.answer_options || [])
               .sort((a, b) => a.option_order - b.option_order)
               .map((option, index) => (
@@ -274,14 +380,15 @@ export function CrossTabChart({
           </BarChart>
         </ResponsiveContainer>
       ) : (
-        <ResponsiveContainer width="100%" height={chartHeight}>
-          <BarChart data={combinationData} layout="vertical" margin={{ left: 120, right: 30 }}>
-            <XAxis type="number" tick={{ fontSize }} />
+        <ResponsiveContainer width="100%" height={combinationHeight}>
+          <BarChart data={combinationData} layout="vertical" margin={{ left: 10, right: 30, top: 10, bottom: 10 }}>
+            <XAxis type="number" tick={{ fontSize: baseFontSize }} />
             <YAxis
               type="category"
               dataKey="name"
-              width={110}
-              tick={{ fontSize: fontSize - 2 }}
+              width={yAxisWidth}
+              tick={<CustomYAxisTick baseSize={baseFontSize - 1} />}
+              interval={0}
             />
             <Tooltip content={<CombinationTooltip totalRespondents={totalRespondents} />} />
             <Bar
