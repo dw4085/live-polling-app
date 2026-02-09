@@ -62,31 +62,35 @@ export function AdminProvider({ children }: { children: ReactNode }) {
   // Check authentication state on mount
   useEffect(() => {
     async function checkAuth() {
-      // Check for dev-mode token first
-      const devToken = localStorage.getItem('admin_token');
-      if (devToken === 'dev-superadmin-token') {
-        // Fetch superadmin record
-        const superadmin = await fetchAdminByEmail(SUPERADMIN_EMAIL);
-        if (superadmin) {
-          setAdmin(superadmin);
-          setIsAuthenticated(true);
+      try {
+        // Check for dev-mode token first
+        const devToken = localStorage.getItem('admin_token');
+        if (devToken === 'dev-superadmin-token') {
+          // Fetch superadmin record
+          const superadmin = await fetchAdminByEmail(SUPERADMIN_EMAIL);
+          if (superadmin) {
+            setAdmin(superadmin);
+            setIsAuthenticated(true);
+          }
+          setLoading(false);
+          return;
         }
+
+        // Check Supabase Auth session
+        const { data: { session } } = await supabase.auth.getSession();
+
+        if (session?.user) {
+          const adminRecord = await fetchAdminByAuthId(session.user.id);
+          if (adminRecord) {
+            setAdmin(adminRecord);
+            setIsAuthenticated(true);
+          }
+        }
+      } catch (error) {
+        console.error('Auth check failed:', error);
+      } finally {
         setLoading(false);
-        return;
       }
-
-      // Check Supabase Auth session
-      const { data: { session } } = await supabase.auth.getSession();
-
-      if (session?.user) {
-        const adminRecord = await fetchAdminByAuthId(session.user.id);
-        if (adminRecord) {
-          setAdmin(adminRecord);
-          setIsAuthenticated(true);
-        }
-      }
-
-      setLoading(false);
     }
 
     checkAuth();
