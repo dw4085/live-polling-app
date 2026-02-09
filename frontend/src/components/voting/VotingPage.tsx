@@ -79,10 +79,15 @@ export function VotingPage() {
       });
     });
 
-    const pollSub = subscribeToPollState(poll.id, (updatedPoll) => {
+    const pollSub = subscribeToPollState(poll.id, async (updatedPoll) => {
       setPoll(updatedPoll);
       if (updatedPoll.state === 'closed') {
         setError('This poll has ended');
+      }
+      // Immediately fetch response counts when results are revealed
+      if (updatedPoll.results_revealed) {
+        const counts = await getResponseCounts(updatedPoll.id);
+        setResponseCounts(counts);
       }
     });
 
@@ -189,6 +194,10 @@ export function VotingPage() {
                 {/* Show chart below question when results are revealed */}
                 {poll?.results_revealed && (
                   <div className="animate-fade-in">
+                    <div className="text-sm text-gray-500 mb-2 flex items-center gap-1">
+                      <span>📊</span>
+                      <span>Live results from all participants</span>
+                    </div>
                     <SingleQuestionChart
                       question={question}
                       results={getResultsForQuestion(question.id)}
