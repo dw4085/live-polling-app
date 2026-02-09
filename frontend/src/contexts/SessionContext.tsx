@@ -9,6 +9,8 @@ interface SessionContextType {
   initSession: (pollId: string) => Promise<void>;
   saveResponse: (questionId: string, answerOptionId: string) => Promise<void>;
   clearSession: () => void;
+  clearResponses: () => void;
+  refreshResponses: () => Promise<void>;
 }
 
 const SessionContext = createContext<SessionContextType | null>(null);
@@ -98,6 +100,22 @@ export function SessionProvider({ children }: { children: ReactNode }) {
     localStorage.removeItem('session_poll_id');
   }, []);
 
+  const clearResponses = useCallback(() => {
+    setResponses({});
+  }, []);
+
+  const refreshResponses = useCallback(async () => {
+    if (!sessionId) return;
+
+    // Reload responses from database
+    const existingResponses = await getSessionResponses(sessionId);
+    const responseMap: Record<string, string> = {};
+    existingResponses.forEach((r) => {
+      responseMap[r.question_id] = r.answer_option_id;
+    });
+    setResponses(responseMap);
+  }, [sessionId]);
+
   return (
     <SessionContext.Provider value={{
       sessionId,
@@ -106,7 +124,9 @@ export function SessionProvider({ children }: { children: ReactNode }) {
       loading,
       initSession,
       saveResponse,
-      clearSession
+      clearSession,
+      clearResponses,
+      refreshResponses
     }}>
       {children}
     </SessionContext.Provider>

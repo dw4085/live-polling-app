@@ -13,7 +13,7 @@ import type { Poll, Question, ResponseCount } from '../../types';
 export function VotingPage() {
   const { code } = useParams<{ code: string }>();
   const navigate = useNavigate();
-  const { initSession, responses, loading: sessionLoading } = useSession();
+  const { initSession, responses, loading: sessionLoading, refreshResponses } = useSession();
 
   const [poll, setPoll] = useState<Poll | null>(null);
   const [questions, setQuestions] = useState<Question[]>([]);
@@ -101,6 +101,8 @@ export function VotingPage() {
           setResponseCounts(counts);
         }
       }
+      // Refresh responses to detect if admin reset them
+      await refreshResponses();
     }, 1000);
 
     return () => {
@@ -108,7 +110,7 @@ export function VotingPage() {
       questionsSub.unsubscribe();
       pollSub.unsubscribe();
     };
-  }, [poll?.id, code]);
+  }, [poll?.id, code, refreshResponses]);
 
   const handlePasswordSubmit = useCallback(async (password: string): Promise<boolean> => {
     if (!poll) return false;
