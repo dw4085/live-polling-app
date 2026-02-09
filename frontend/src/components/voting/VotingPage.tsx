@@ -22,6 +22,7 @@ export function VotingPage() {
   const [showPasswordModal, setShowPasswordModal] = useState(false);
   const [passwordVerified, setPasswordVerified] = useState(false);
   const [responseCounts, setResponseCounts] = useState<ResponseCount[]>([]);
+  const [collapsedResults, setCollapsedResults] = useState<Record<string, boolean>>({});
 
   // Load poll data
   useEffect(() => {
@@ -86,7 +87,7 @@ export function VotingPage() {
       }
     });
 
-    // Poll for poll state and response counts every second (more reliable than subscriptions)
+    // Poll for changes every second (more reliable than subscriptions)
     const interval = setInterval(async () => {
       // Refetch poll to check for results_revealed changes
       const pollData = await getPollByCode(code!);
@@ -101,6 +102,11 @@ export function VotingPage() {
           setResponseCounts(counts);
         }
       }
+
+      // Refetch questions to get visibility changes
+      const questionsData = await getQuestionsForPoll(poll.id);
+      setQuestions(questionsData);
+
       // Refresh responses to detect if admin reset them
       await refreshResponses();
     }, 1000);
@@ -122,6 +128,13 @@ export function VotingPage() {
     }
     return false;
   }, [poll]);
+
+  const toggleResultsCollapse = (questionId: string) => {
+    setCollapsedResults(prev => ({
+      ...prev,
+      [questionId]: !prev[questionId]
+    }));
+  };
 
   // Filter to only show visible questions
   const visibleQuestions = questions.filter(q => q.is_visible);
@@ -199,17 +212,33 @@ export function VotingPage() {
                   questionNumber={index + 1}
                   selectedAnswer={responses[question.id]}
                 />
-                {/* Show chart below question when results are revealed */}
+                {/* Show collapsible chart below question when results are revealed */}
                 {poll?.results_revealed && (
                   <div className="animate-fade-in">
-                    <div className="text-sm text-gray-500 mb-2 flex items-center gap-1">
+                    <button
+                      onClick={() => toggleResultsCollapse(question.id)}
+                      className="w-full text-sm text-gray-500 flex items-center gap-2 hover:text-gray-700 transition-colors py-2"
+                    >
+                      <svg
+                        className={`w-4 h-4 transition-transform ${collapsedResults[question.id] ? '' : 'rotate-90'}`}
+                        fill="none"
+                        stroke="currentColor"
+                        viewBox="0 0 24 24"
+                      >
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
+                      </svg>
                       <span>📊</span>
                       <span>Live results from all participants</span>
-                    </div>
-                    <SingleQuestionChart
-                      question={question}
-                      results={getResultsForQuestion(question.id)}
-                    />
+                      <span className="text-xs text-gray-400">
+                        ({collapsedResults[question.id] ? 'click to expand' : 'click to collapse'})
+                      </span>
+                    </button>
+                    {!collapsedResults[question.id] && (
+                      <SingleQuestionChart
+                        question={question}
+                        results={getResultsForQuestion(question.id)}
+                      />
+                    )}
                   </div>
                 )}
               </div>
