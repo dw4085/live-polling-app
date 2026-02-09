@@ -6,8 +6,11 @@ import { AdminProvider } from './contexts/AdminContext';
 import { VotingPage } from './components/voting/VotingPage';
 import { ResultsPage } from './components/results/ResultsPage';
 import { AdminLogin } from './components/admin/AdminLogin';
+import { AdminSignup } from './components/admin/AdminSignup';
 import { AdminDashboard } from './components/admin/AdminDashboard';
 import { PollEditor } from './components/admin/PollEditor';
+import { AuthCallback } from './components/admin/AuthCallback';
+import { PendingApproval } from './components/admin/PendingApproval';
 import { NotFound } from './components/common/NotFound';
 
 function App() {
@@ -22,6 +25,9 @@ function App() {
 
             {/* Admin routes */}
             <Route path="/admin" element={<AdminLogin />} />
+            <Route path="/admin/signup" element={<AdminSignup />} />
+            <Route path="/admin/auth/callback" element={<AuthCallback />} />
+            <Route path="/admin/pending" element={<PendingApproval />} />
             <Route path="/admin/dashboard" element={<AdminDashboard />} />
             <Route path="/admin/poll/:pollId" element={<PollEditor />} />
 

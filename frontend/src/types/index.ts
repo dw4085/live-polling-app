@@ -1,3 +1,20 @@
+// Admin Types
+export type AdminRole = 'admin' | 'superadmin';
+export type AdminStatus = 'pending' | 'approved' | 'rejected';
+
+export interface Admin {
+  id: string;
+  auth_user_id: string | null;
+  email: string;
+  name: string;
+  affiliation: string | null;
+  role: AdminRole;
+  status: AdminStatus;
+  created_at: string;
+  approved_at: string | null;
+  approved_by: string | null;
+}
+
 // Poll Types
 export type PollState = 'draft' | 'open' | 'closed' | 'archived';
 
@@ -15,6 +32,7 @@ export interface Poll {
   updated_at: string;
   closed_at: string | null;
   auto_delete_at: string | null;
+  admin_id: string | null;
 }
 
 export interface Question {
@@ -109,4 +127,11 @@ export interface SubmitResponseInput {
   session_token: string;
   question_id: string;
   answer_option_id: string;
+}
+
+// Admin Signup Input
+export interface AdminSignupInput {
+  email: string;
+  name: string;
+  affiliation?: string;
 }
