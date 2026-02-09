@@ -221,7 +221,7 @@ export function PollEditor() {
                   type="text"
                   value={titleInput}
                   onChange={(e) => setTitleInput(e.target.value)}
-                  className="px-3 py-1 rounded text-navy"
+                  className="px-3 py-1 rounded bg-white text-navy"
                   autoFocus
                 />
                 <button onClick={handleTitleSave} className="text-green-400 hover:text-green-300">Save</button>
