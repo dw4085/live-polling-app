@@ -117,6 +117,29 @@ export async function submitResponse(
   }
 }
 
+export async function submitMultiResponse(
+  sessionId: string,
+  questionId: string,
+  answerOptionIds: string[]
+): Promise<void> {
+  // Delete all existing responses for this session+question
+  await supabase
+    .from('responses')
+    .delete()
+    .eq('session_id', sessionId)
+    .eq('question_id', questionId);
+
+  // Insert new rows for each selected option
+  if (answerOptionIds.length > 0) {
+    const rows = answerOptionIds.map(optionId => ({
+      session_id: sessionId,
+      question_id: questionId,
+      answer_option_id: optionId
+    }));
+    await supabase.from('responses').insert(rows);
+  }
+}
+
 export async function getSessionResponses(sessionId: string): Promise<Response[]> {
   const { data } = await supabase
     .from('responses')

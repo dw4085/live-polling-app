@@ -139,8 +139,12 @@ export function VotingPage() {
   // Filter to only show visible questions
   const visibleQuestions = questions.filter(q => q.is_visible);
 
-  // Count answered among visible questions only
-  const answeredCount = visibleQuestions.filter(q => responses[q.id]).length;
+  // Count answered among visible questions only (multi-select with empty array = unanswered)
+  const answeredCount = visibleQuestions.filter(q => {
+    const r = responses[q.id];
+    if (Array.isArray(r)) return r.length > 0;
+    return !!r;
+  }).length;
   const totalQuestions = visibleQuestions.length;
   const allAnswered = answeredCount === totalQuestions && totalQuestions > 0;
 

@@ -1,13 +1,14 @@
 import { createContext, useContext, useState, useEffect, useCallback, type ReactNode } from 'react';
-import { createSession, getSessionByToken, getSessionResponses, submitResponse } from '../services/supabase';
+import { createSession, getSessionByToken, getSessionResponses, submitResponse, submitMultiResponse } from '../services/supabase';
 
 interface SessionContextType {
   sessionId: string | null;
   sessionToken: string | null;
-  responses: Record<string, string>; // questionId -> answerOptionId
+  responses: Record<string, string | string[]>; // questionId -> answerOptionId or answerOptionIds[]
   loading: boolean;
   initSession: (pollId: string) => Promise<void>;
   saveResponse: (questionId: string, answerOptionId: string) => Promise<void>;
+  saveMultiResponse: (questionId: string, answerOptionIds: string[]) => Promise<void>;
   clearSession: () => void;
   clearResponses: () => void;
   refreshResponses: () => Promise<void>;
@@ -27,7 +28,7 @@ function generateSessionToken(): string {
 export function SessionProvider({ children }: { children: ReactNode }) {
   const [sessionId, setSessionId] = useState<string | null>(null);
   const [sessionToken, setSessionToken] = useState<string | null>(null);
-  const [responses, setResponses] = useState<Record<string, string>>({});
+  const [responses, setResponses] = useState<Record<string, string | string[]>>({});
   const [loading, setLoading] = useState(false);
 
   // Load existing session from localStorage
@@ -52,11 +53,21 @@ export function SessionProvider({ children }: { children: ReactNode }) {
           setSessionId(existingSession.id);
           setSessionToken(storedToken);
 
-          // Load existing responses
+          // Load existing responses (group multiple responses per question into arrays)
           const existingResponses = await getSessionResponses(existingSession.id);
-          const responseMap: Record<string, string> = {};
+          const responseMap: Record<string, string | string[]> = {};
           existingResponses.forEach((r) => {
-            responseMap[r.question_id] = r.answer_option_id;
+            const existing = responseMap[r.question_id];
+            if (existing) {
+              // Multiple responses for this question — use array
+              if (Array.isArray(existing)) {
+                existing.push(r.answer_option_id);
+              } else {
+                responseMap[r.question_id] = [existing, r.answer_option_id];
+              }
+            } else {
+              responseMap[r.question_id] = r.answer_option_id;
+            }
           });
           setResponses(responseMap);
           return;
@@ -92,6 +103,19 @@ export function SessionProvider({ children }: { children: ReactNode }) {
     await submitResponse(sessionId, questionId, answerOptionId);
   }, [sessionId]);
 
+  const saveMultiResponse = useCallback(async (questionId: string, answerOptionIds: string[]) => {
+    if (!sessionId) return;
+
+    // Optimistically update UI
+    setResponses(prev => ({
+      ...prev,
+      [questionId]: answerOptionIds.length === 1 ? answerOptionIds[0] : answerOptionIds
+    }));
+
+    // Persist to database
+    await submitMultiResponse(sessionId, questionId, answerOptionIds);
+  }, [sessionId]);
+
   const clearSession = useCallback(() => {
     setSessionId(null);
     setSessionToken(null);
@@ -107,11 +131,20 @@ export function SessionProvider({ children }: { children: ReactNode }) {
   const refreshResponses = useCallback(async () => {
     if (!sessionId) return;
 
-    // Reload responses from database
+    // Reload responses from database (group multiple responses per question)
     const existingResponses = await getSessionResponses(sessionId);
-    const responseMap: Record<string, string> = {};
+    const responseMap: Record<string, string | string[]> = {};
     existingResponses.forEach((r) => {
-      responseMap[r.question_id] = r.answer_option_id;
+      const existing = responseMap[r.question_id];
+      if (existing) {
+        if (Array.isArray(existing)) {
+          existing.push(r.answer_option_id);
+        } else {
+          responseMap[r.question_id] = [existing, r.answer_option_id];
+        }
+      } else {
+        responseMap[r.question_id] = r.answer_option_id;
+      }
     });
     setResponses(responseMap);
   }, [sessionId]);
@@ -124,6 +157,7 @@ export function SessionProvider({ children }: { children: ReactNode }) {
       loading,
       initSession,
       saveResponse,
+      saveMultiResponse,
       clearSession,
       clearResponses,
       refreshResponses

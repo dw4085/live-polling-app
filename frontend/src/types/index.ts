@@ -43,6 +43,7 @@ export interface Question {
   chart_type: ChartType;
   is_revealed: boolean;
   is_visible: boolean;
+  allow_multiple: boolean;
   created_at: string;
   updated_at: string;
   answer_options?: AnswerOption[];
@@ -128,6 +129,12 @@ export interface SubmitResponseInput {
   session_token: string;
   question_id: string;
   answer_option_id: string;
+}
+
+export interface SubmitMultiResponseInput {
+  session_token: string;
+  question_id: string;
+  answer_option_ids: string[];
 }
 
 // Admin Signup Input

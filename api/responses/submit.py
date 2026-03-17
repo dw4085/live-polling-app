@@ -27,7 +27,8 @@ def handler(request):
 
     session_token = body["session_token"]
     question_id = body["question_id"]
-    answer_option_id = body["answer_option_id"]
+    answer_option_id = body.get("answer_option_id")
+    answer_option_ids = body.get("answer_option_ids")
 
     supabase = get_supabase_client()
 
@@ -45,10 +46,37 @@ def handler(request):
         return error_response(HTTPStatus.FORBIDDEN, "Poll is not accepting responses")
 
     # Verify question belongs to poll
-    question = supabase.table("questions").select("id").eq("id", question_id).eq("poll_id", poll_id).single().execute()
+    question = supabase.table("questions").select("id, allow_multiple").eq("id", question_id).eq("poll_id", poll_id).single().execute()
     if not question.data:
         return error_response(HTTPStatus.NOT_FOUND, "Question not found")
 
+    # Multi-select path
+    if answer_option_ids is not None:
+        if not question.data.get("allow_multiple"):
+            return error_response(HTTPStatus.BAD_REQUEST, "Question does not allow multiple selections")
+
+        # Verify all answer options belong to question
+        for opt_id in answer_option_ids:
+            option = supabase.table("answer_options").select("id").eq("id", opt_id).eq("question_id", question_id).single().execute()
+            if not option.data:
+                return error_response(HTTPStatus.NOT_FOUND, f"Answer option {opt_id} not found")
+
+        # Delete existing responses for this session+question
+        supabase.table("responses").delete().eq("session_id", session_id).eq("question_id", question_id).execute()
+
+        # Insert new rows for each selected option
+        if answer_option_ids:
+            rows = [
+                {"session_id": session_id, "question_id": question_id, "answer_option_id": opt_id}
+                for opt_id in answer_option_ids
+            ]
+            result = supabase.table("responses").insert(rows).execute()
+            if not result.data:
+                return error_response(HTTPStatus.INTERNAL_SERVER_ERROR, "Failed to save responses")
+
+        return json_response(HTTPStatus.OK, {"success": True})
+
+    # Single-select path
     # Verify answer option belongs to question
     option = supabase.table("answer_options").select("id").eq("id", answer_option_id).eq("question_id", question_id).single().execute()
     if not option.data:

@@ -198,22 +198,22 @@ export function CrossTabChart({
     const q1Options = question1.answer_options || [];
     const q2Options = question2.answer_options || [];
 
-    // Group responses by session
-    const responsesBySession: Record<string, { q1?: string; q2?: string }> = {};
+    // Group responses by session (support multiple answers per question)
+    const responsesBySession: Record<string, { q1: string[]; q2: string[] }> = {};
     responses.forEach(r => {
       if (!responsesBySession[r.session_id]) {
-        responsesBySession[r.session_id] = {};
+        responsesBySession[r.session_id] = { q1: [], q2: [] };
       }
       if (r.question_id === question1.id) {
-        responsesBySession[r.session_id].q1 = r.answer_option_id;
+        responsesBySession[r.session_id].q1.push(r.answer_option_id);
       } else if (r.question_id === question2.id) {
-        responsesBySession[r.session_id].q2 = r.answer_option_id;
+        responsesBySession[r.session_id].q2.push(r.answer_option_id);
       }
     });
 
     // Count respondents who answered both questions
     const totalRespondents = Object.values(responsesBySession).filter(
-      ({ q1, q2 }) => q1 && q2
+      ({ q1, q2 }) => q1.length > 0 && q2.length > 0
     ).length;
 
     // Build cross-tab matrix
@@ -225,11 +225,15 @@ export function CrossTabChart({
       });
     });
 
-    // Count combinations
+    // Count combinations (generate N x M pairings for multi-select)
     Object.values(responsesBySession).forEach(({ q1, q2 }) => {
-      if (q1 && q2 && matrix[q1] && matrix[q1][q2] !== undefined) {
-        matrix[q1][q2]++;
-      }
+      q1.forEach(a1 => {
+        q2.forEach(a2 => {
+          if (matrix[a1] && matrix[a1][a2] !== undefined) {
+            matrix[a1][a2]++;
+          }
+        });
+      });
     });
 
     // Calculate max label length for sizing

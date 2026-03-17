@@ -74,7 +74,13 @@ def validate_response_data(data: dict) -> ValidationResult:
     if not data.get("question_id"):
         errors.append("Question ID is required")
 
-    if not data.get("answer_option_id"):
+    has_single = data.get("answer_option_id")
+    has_multi = data.get("answer_option_ids")
+
+    if not has_single and not has_multi:
         errors.append("Answer option ID is required")
+
+    if has_multi and not isinstance(has_multi, list):
+        errors.append("answer_option_ids must be a list")
 
     return ValidationResult(valid=len(errors) == 0, errors=errors if errors else None)

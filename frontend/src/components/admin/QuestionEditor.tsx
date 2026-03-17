@@ -222,6 +222,30 @@ export function QuestionEditor({
             </div>
           </div>
 
+          {/* Multi-select Toggle */}
+          <div className="mb-4">
+            <label className="flex items-center gap-3 cursor-pointer">
+              <div
+                className={`relative w-10 h-6 rounded-full transition-colors ${
+                  question.allow_multiple ? 'bg-navy' : 'bg-gray-300'
+                }`}
+                onClick={() => onUpdate({ allow_multiple: !question.allow_multiple })}
+              >
+                <div
+                  className={`absolute top-1 w-4 h-4 rounded-full bg-white transition-transform ${
+                    question.allow_multiple ? 'translate-x-5' : 'translate-x-1'
+                  }`}
+                />
+              </div>
+              <span
+                className="text-sm font-medium text-gray-600"
+                onClick={() => onUpdate({ allow_multiple: !question.allow_multiple })}
+              >
+                Check all that apply
+              </span>
+            </label>
+          </div>
+
           {/* Answer Options */}
           <div>
             <label className="block text-sm font-medium text-gray-600 mb-2">Answer Options</label>
