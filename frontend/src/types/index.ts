@@ -25,7 +25,7 @@ export interface Poll {
   title: string;
   slug: string | null;
   access_code: string;
-  password_hash: string | null;
+  password_hash?: string | null;
   state: PollState;
   results_revealed: boolean;
   created_at: string;

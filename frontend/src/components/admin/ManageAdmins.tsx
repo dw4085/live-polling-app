@@ -1,15 +1,7 @@
 import { useEffect, useState, useCallback } from 'react';
-import { supabase } from '../../services/supabase';
+import { deleteAdmin as deleteAdminApi, listAdmins, setAdminStatus, type AdminWithPolls } from '../../services/api';
 import { useAdmin } from '../../contexts/AdminContext';
 import type { Admin, Poll } from '../../types';
-
-interface PollWithQuestionCount extends Poll {
-  question_count: number;
-}
-
-interface AdminWithPolls extends Admin {
-  polls: PollWithQuestionCount[];
-}
 
 export function ManageAdmins() {
   const { admin: currentAdmin, isSuperadmin } = useAdmin();
@@ -19,53 +11,11 @@ export function ManageAdmins() {
   const [selectedAdmin, setSelectedAdmin] = useState<AdminWithPolls | null>(null);
 
   const loadAdmins = useCallback(async () => {
-    // Fetch admins
-    const { data: adminsData, error: adminsError } = await supabase
-      .from('admins')
-      .select('*')
-      .order('created_at', { ascending: false });
-
-    if (adminsError || !adminsData) {
-      setLoading(false);
-      return;
+    try {
+      setAdmins(await listAdmins());
+    } catch (error) {
+      console.error('Failed to load admins:', error);
     }
-
-    // Fetch all polls with question counts
-    const { data: pollsData } = await supabase
-      .from('polls')
-      .select(`
-        *,
-        questions:questions(count)
-      `)
-      .neq('state', 'archived');
-
-    // Group polls by admin_id
-    const pollsByAdmin: Record<string, PollWithQuestionCount[]> = {};
-    if (pollsData) {
-      pollsData.forEach((poll: any) => {
-        const adminId = poll.admin_id;
-        if (!adminId) return;
-
-        const pollWithCount: PollWithQuestionCount = {
-          ...poll,
-          question_count: poll.questions?.[0]?.count || 0
-        };
-        delete (pollWithCount as any).questions;
-
-        if (!pollsByAdmin[adminId]) {
-          pollsByAdmin[adminId] = [];
-        }
-        pollsByAdmin[adminId].push(pollWithCount);
-      });
-    }
-
-    // Combine admins with their polls
-    const adminsWithPolls: AdminWithPolls[] = adminsData.map(admin => ({
-      ...admin as Admin,
-      polls: pollsByAdmin[admin.id] || []
-    }));
-
-    setAdmins(adminsWithPolls);
     setLoading(false);
   }, []);
 
@@ -76,22 +26,11 @@ export function ManageAdmins() {
   async function approveAdmin(adminId: string) {
     if (!currentAdmin) return;
     setActionLoading(adminId);
-
-    const { error } = await supabase
-      .from('admins')
-      .update({
-        status: 'approved',
-        approved_at: new Date().toISOString(),
-        approved_by: currentAdmin.id
-      })
-      .eq('id', adminId);
-
-    if (!error) {
-      setAdmins(admins.map(a =>
-        a.id === adminId
-          ? { ...a, status: 'approved' as const, approved_at: new Date().toISOString(), approved_by: currentAdmin.id }
-          : a
-      ));
+    try {
+      const updated = await setAdminStatus(adminId, 'approved');
+      setAdmins(admins.map(a => a.id === adminId ? { ...a, ...updated } : a));
+    } catch (error) {
+      alert((error as Error).message);
     }
     setActionLoading(null);
   }
@@ -99,16 +38,11 @@ export function ManageAdmins() {
   async function rejectAdmin(adminId: string) {
     if (!confirm('Are you sure you want to reject this admin request?')) return;
     setActionLoading(adminId);
-
-    const { error } = await supabase
-      .from('admins')
-      .update({ status: 'rejected' })
-      .eq('id', adminId);
-
-    if (!error) {
-      setAdmins(admins.map(a =>
-        a.id === adminId ? { ...a, status: 'rejected' as const } : a
-      ));
+    try {
+      const updated = await setAdminStatus(adminId, 'rejected');
+      setAdmins(admins.map(a => a.id === adminId ? { ...a, ...updated } : a));
+    } catch (error) {
+      alert((error as Error).message);
     }
     setActionLoading(null);
   }
@@ -116,14 +50,11 @@ export function ManageAdmins() {
   async function deleteAdmin(adminId: string) {
     if (!confirm('Are you sure you want to delete this admin? This cannot be undone.')) return;
     setActionLoading(adminId);
-
-    const { error } = await supabase
-      .from('admins')
-      .delete()
-      .eq('id', adminId);
-
-    if (!error) {
+    try {
+      await deleteAdminApi(adminId);
       setAdmins(admins.filter(a => a.id !== adminId));
+    } catch (error) {
+      alert((error as Error).message);
     }
     setActionLoading(null);
   }

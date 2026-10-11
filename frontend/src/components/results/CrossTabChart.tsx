@@ -9,13 +9,13 @@ import {
   Legend,
   Cell
 } from 'recharts';
-import { supabase } from '../../services/supabase';
+import { getCrossTabResponses } from '../../services/api';
 import type { Question, Response } from '../../types';
 
 interface CrossTabChartProps {
   question1: Question;
   question2: Question;
-  pollId: string;
+  pollCode: string;
   presentationMode?: boolean;
 }
 
@@ -172,6 +172,7 @@ function CombinationTooltip({ active, payload, totalRespondents }: any) {
 export function CrossTabChart({
   question1,
   question2,
+  pollCode,
   presentationMode = false
 }: CrossTabChartProps) {
   const [responses, setResponses] = useState<Response[]>([]);
@@ -181,17 +182,17 @@ export function CrossTabChart({
   // Fetch all responses for cross-tabulation
   useEffect(() => {
     async function loadResponses() {
-      const { data } = await supabase
-        .from('responses')
-        .select('*')
-        .in('question_id', [question1.id, question2.id]);
-
-      setResponses(data || []);
+      try {
+        setResponses(await getCrossTabResponses(pollCode, question1.id, question2.id));
+      } catch (error) {
+        console.error('Failed to load cross-tab responses:', error);
+        setResponses([]);
+      }
       setLoading(false);
     }
 
     loadResponses();
-  }, [question1.id, question2.id]);
+  }, [pollCode, question1.id, question2.id]);
 
   // Build cross-tabulation matrix
   const { groupedData, combinationData, totalRespondents, maxLabelLength } = useMemo(() => {

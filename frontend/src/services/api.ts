@@ -1,217 +1,134 @@
-import type {
-  Poll,
-  Question,
-  CreatePollInput,
-  CreateQuestionInput,
-  ApiResponse,
-  PollWithQuestions
-} from '../types';
+import type { Admin, AdminSignupInput, AnswerOption, Poll, Question, Response, ResponseCount, Session } from '../types';
 
-const API_BASE = '/api';
+// Browser-side wrappers for the PollAnywhere API (api/app.ts). The browser never
+// talks to the database directly.
 
-// Helper function for API calls
-async function fetchApi<T>(
-  endpoint: string,
-  options: RequestInit = {}
-): Promise<ApiResponse<T>> {
-  try {
-    const token = localStorage.getItem('admin_token');
-    const headers: HeadersInit = {
-      'Content-Type': 'application/json',
-      ...(token && { Authorization: `Bearer ${token}` }),
-      ...options.headers
-    };
+export class ApiError extends Error {
+  status: number;
 
-    const response = await fetch(`${API_BASE}${endpoint}`, {
-      ...options,
-      headers
-    });
-
-    const data = await response.json();
-
-    if (!response.ok) {
-      return { error: data.error || 'An error occurred' };
-    }
-
-    return { data };
-  } catch (error) {
-    return { error: 'Network error' };
+  constructor(status: number, message: string) {
+    super(message);
+    this.status = status;
   }
 }
 
-// Admin authentication
-export async function adminLogin(password: string): Promise<ApiResponse<{ token: string }>> {
-  return fetchApi('/admin/login', {
-    method: 'POST',
-    body: JSON.stringify({ password })
+async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
+  const res = await fetch(`/api/${path}`, {
+    ...init,
+    credentials: 'same-origin',
+    headers: init.body ? { 'Content-Type': 'application/json', ...init.headers } : init.headers,
   });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new ApiError(res.status, data.error || `Request failed (${res.status})`);
+  return data as T;
 }
 
-export async function verifyAdminToken(): Promise<ApiResponse<{ valid: boolean }>> {
-  return fetchApi('/admin/verify');
+const post = <T>(path: string, body: unknown = {}) => request<T>(path, { method: 'POST', body: JSON.stringify(body) });
+const patch = <T>(path: string, body: unknown) => request<T>(path, { method: 'PATCH', body: JSON.stringify(body) });
+const del = <T>(path: string) => request<T>(path, { method: 'DELETE' });
+
+// ---------- Participants & projector ----------
+
+export interface LiveState {
+  poll: Poll;
+  questions: Question[];
+  counts: ResponseCount[];
 }
 
-// Poll operations
-export async function createPoll(input: CreatePollInput): Promise<ApiResponse<Poll>> {
-  return fetchApi('/polls/create', {
-    method: 'POST',
-    body: JSON.stringify(input)
-  });
+export function getLiveState(code: string): Promise<LiveState> {
+  return request<LiveState>(`live/${encodeURIComponent(code)}`);
 }
 
-export async function getPoll(pollId: string): Promise<ApiResponse<PollWithQuestions>> {
-  return fetchApi(`/polls/${pollId}`);
+export async function getCrossTabResponses(code: string, q1: string, q2: string): Promise<Response[]> {
+  const params = new URLSearchParams({ q1, q2 });
+  const { responses } = await request<{ responses: Response[] }>(`live/${encodeURIComponent(code)}/crosstab?${params}`);
+  return responses;
 }
 
-export async function updatePoll(
-  pollId: string,
-  updates: Partial<Poll>
-): Promise<ApiResponse<Poll>> {
-  return fetchApi(`/polls/${pollId}/update`, {
-    method: 'PUT',
-    body: JSON.stringify(updates)
-  });
+export async function createSession(pollId: string): Promise<Session> {
+  const { session } = await post<{ session: Session }>('sessions', { poll_id: pollId });
+  return session;
 }
 
-export async function changePollState(
-  pollId: string,
-  state: Poll['state']
-): Promise<ApiResponse<Poll>> {
-  return fetchApi(`/polls/${pollId}/state`, {
-    method: 'PATCH',
-    body: JSON.stringify({ state })
-  });
+export function getSession(token: string): Promise<{ session: Session; responses: Pick<Response, 'question_id' | 'answer_option_id'>[] }> {
+  return request(`sessions/${encodeURIComponent(token)}`);
 }
 
-export async function resetPoll(pollId: string): Promise<ApiResponse<{ success: boolean }>> {
-  return fetchApi(`/polls/${pollId}/reset`, {
-    method: 'POST'
-  });
+export async function submitAnswers(sessionToken: string, questionId: string, answerOptionIds: string[]): Promise<void> {
+  await post('responses', { session_token: sessionToken, question_id: questionId, answer_option_ids: answerOptionIds });
 }
 
-export async function duplicatePoll(pollId: string): Promise<ApiResponse<Poll>> {
-  return fetchApi(`/polls/${pollId}/duplicate`, {
-    method: 'POST'
-  });
+// ---------- Admin identity ----------
+
+export interface Me {
+  admin: Admin | null;
+  email: string | null;
+  signedIn: boolean;
 }
 
-export async function deletePoll(pollId: string): Promise<ApiResponse<{ success: boolean }>> {
-  return fetchApi(`/polls/${pollId}/delete`, {
-    method: 'DELETE'
-  });
+export const getMe = () => request<Me>('admin/me');
+export const passwordLogin = (password: string) => post<{ admin: Admin }>('admin/login', { password });
+export const passwordLogout = () => post('admin/logout');
+export const requestAdminAccess = (input: Omit<AdminSignupInput, 'email'>) => post<{ admin: Admin }>('admin/signup', input);
+
+// ---------- Admin: polls, questions, options ----------
+
+export async function listPolls(): Promise<Poll[]> {
+  return (await request<{ polls: Poll[] }>('admin/polls')).polls;
 }
 
-export async function exportPollCsv(pollId: string): Promise<Blob | null> {
-  try {
-    const token = localStorage.getItem('admin_token');
-    const response = await fetch(`${API_BASE}/polls/${pollId}/export`, {
-      headers: {
-        ...(token && { Authorization: `Bearer ${token}` })
-      }
-    });
-
-    if (!response.ok) return null;
-
-    return response.blob();
-  } catch {
-    return null;
-  }
+export async function createPoll(title: string): Promise<Poll> {
+  return (await post<{ poll: Poll }>('admin/polls', { title })).poll;
 }
 
-// Question operations
-export async function createQuestion(input: CreateQuestionInput): Promise<ApiResponse<Question>> {
-  return fetchApi('/questions/create', {
-    method: 'POST',
-    body: JSON.stringify(input)
-  });
+export function getPollForEditing(pollId: string) {
+  return request<{ poll: Poll; questions: Question[]; participant_count: number }>(`admin/polls/${pollId}`);
 }
 
-export async function updateQuestion(
-  questionId: string,
-  updates: Partial<Question>
-): Promise<ApiResponse<Question>> {
-  return fetchApi(`/questions/${questionId}/update`, {
-    method: 'PUT',
-    body: JSON.stringify(updates)
-  });
+export async function updatePoll(pollId: string, updates: Partial<Pick<Poll, 'title' | 'state' | 'results_revealed'>>): Promise<Poll> {
+  return (await patch<{ poll: Poll }>(`admin/polls/${pollId}`, updates)).poll;
 }
 
-export async function deleteQuestion(questionId: string): Promise<ApiResponse<{ success: boolean }>> {
-  return fetchApi(`/questions/${questionId}/delete`, {
-    method: 'DELETE'
-  });
+export const deletePoll = (pollId: string) => del(`admin/polls/${pollId}`);
+export const resetPollResponses = (pollId: string) => post(`admin/polls/${pollId}/reset`);
+export const setAllQuestionsVisible = (pollId: string, visible: boolean) => post(`admin/polls/${pollId}/visibility`, { visible });
+
+export async function getParticipantCount(pollId: string): Promise<number> {
+  return (await request<{ participant_count: number }>(`admin/polls/${pollId}/participants`)).participant_count;
 }
 
-export async function revealQuestion(
-  questionId: string,
-  isRevealed: boolean
-): Promise<ApiResponse<Question>> {
-  return fetchApi(`/questions/${questionId}/reveal`, {
-    method: 'PATCH',
-    body: JSON.stringify({ is_revealed: isRevealed })
-  });
+export async function addQuestion(pollId: string): Promise<Question[]> {
+  return (await post<{ questions: Question[] }>(`admin/polls/${pollId}/questions`)).questions;
 }
 
-export async function reorderQuestions(
-  pollId: string,
-  questionIds: string[]
-): Promise<ApiResponse<{ success: boolean }>> {
-  return fetchApi('/questions/reorder', {
-    method: 'PUT',
-    body: JSON.stringify({ poll_id: pollId, question_ids: questionIds })
-  });
+export type QuestionUpdate = Partial<Pick<Question, 'question_text' | 'chart_type' | 'allow_multiple' | 'is_revealed' | 'is_visible'>>;
+
+export const updateQuestion = (questionId: string, updates: QuestionUpdate) => patch(`admin/questions/${questionId}`, updates);
+export const deleteQuestion = (questionId: string) => del(`admin/questions/${questionId}`);
+
+export async function addOption(questionId: string, optionText: string): Promise<AnswerOption> {
+  return (await post<{ option: AnswerOption }>(`admin/questions/${questionId}/options`, { option_text: optionText })).option;
 }
 
-// Access verification
-export async function verifyPollAccess(code: string): Promise<ApiResponse<{
-  poll_id: string;
-  requires_password: boolean;
-}>> {
-  return fetchApi('/access/verify_poll', {
-    method: 'POST',
-    body: JSON.stringify({ code })
-  });
+export const updateOption = (optionId: string, optionText: string) => patch(`admin/options/${optionId}`, { option_text: optionText });
+export const deleteOption = (optionId: string) => del(`admin/options/${optionId}`);
+
+// ---------- Superadmin ----------
+
+export interface PollWithQuestionCount extends Poll {
+  question_count: number;
 }
 
-export async function verifyPollPassword(
-  pollId: string,
-  password: string
-): Promise<ApiResponse<{ valid: boolean }>> {
-  return fetchApi('/access/verify_password', {
-    method: 'POST',
-    body: JSON.stringify({ poll_id: pollId, password })
-  });
+export interface AdminWithPolls extends Admin {
+  polls: PollWithQuestionCount[];
 }
 
-// Session operations
-export async function createSessionApi(
-  pollId: string,
-  sessionToken: string
-): Promise<ApiResponse<{ session_id: string }>> {
-  return fetchApi('/sessions/create', {
-    method: 'POST',
-    body: JSON.stringify({ poll_id: pollId, session_token: sessionToken })
-  });
+export async function listAdmins(): Promise<AdminWithPolls[]> {
+  return (await request<{ admins: AdminWithPolls[] }>('admin/admins')).admins;
 }
 
-// Response operations
-export async function submitResponseApi(
-  sessionToken: string,
-  questionId: string,
-  answerOptionId: string
-): Promise<ApiResponse<{ success: boolean }>> {
-  return fetchApi('/responses/submit', {
-    method: 'POST',
-    body: JSON.stringify({
-      session_token: sessionToken,
-      question_id: questionId,
-      answer_option_id: answerOptionId
-    })
-  });
+export async function setAdminStatus(adminId: string, status: 'approved' | 'rejected'): Promise<Admin> {
+  return (await patch<{ admin: Admin }>(`admin/admins/${adminId}`, { status })).admin;
 }
 
-export async function getAggregatedResults(pollId: string): Promise<ApiResponse<{
-  results: Record<string, Record<string, number>>;
-}>> {
-  return fetchApi(`/responses/${pollId}/aggregate`);
-}
+export const deleteAdmin = (adminId: string) => del(`admin/admins/${adminId}`);

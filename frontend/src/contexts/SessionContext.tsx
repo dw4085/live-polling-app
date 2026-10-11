@@ -1,5 +1,6 @@
-import { createContext, useContext, useState, useEffect, useCallback, type ReactNode } from 'react';
-import { createSession, getSessionByToken, getSessionResponses, submitResponse, submitMultiResponse } from '../services/supabase';
+import { createContext, useContext, useState, useCallback, type ReactNode } from 'react';
+import { createSession, getSession, submitAnswers } from '../services/api';
+import type { Response } from '../types';
 
 interface SessionContextType {
   sessionId: string | null;
@@ -16,28 +17,29 @@ interface SessionContextType {
 
 const SessionContext = createContext<SessionContextType | null>(null);
 
-function generateSessionToken(): string {
-  const chars = 'abcdefghijklmnopqrstuvwxyz0123456789';
-  let token = '';
-  for (let i = 0; i < 32; i++) {
-    token += chars[Math.floor(Math.random() * chars.length)];
-  }
-  return token;
+// Group answers per question (multiple answers per question become an array)
+function toResponseMap(rows: Pick<Response, 'question_id' | 'answer_option_id'>[]) {
+  const responseMap: Record<string, string | string[]> = {};
+  rows.forEach((r) => {
+    const existing = responseMap[r.question_id];
+    if (existing) {
+      if (Array.isArray(existing)) {
+        existing.push(r.answer_option_id);
+      } else {
+        responseMap[r.question_id] = [existing, r.answer_option_id];
+      }
+    } else {
+      responseMap[r.question_id] = r.answer_option_id;
+    }
+  });
+  return responseMap;
 }
 
 export function SessionProvider({ children }: { children: ReactNode }) {
   const [sessionId, setSessionId] = useState<string | null>(null);
-  const [sessionToken, setSessionToken] = useState<string | null>(null);
+  const [sessionToken, setSessionToken] = useState<string | null>(() => localStorage.getItem('session_token'));
   const [responses, setResponses] = useState<Record<string, string | string[]>>({});
   const [loading, setLoading] = useState(false);
-
-  // Load existing session from localStorage
-  useEffect(() => {
-    const storedToken = localStorage.getItem('session_token');
-    if (storedToken) {
-      setSessionToken(storedToken);
-    }
-  }, []);
 
   const initSession = useCallback(async (pollId: string) => {
     setLoading(true);
@@ -48,50 +50,50 @@ export function SessionProvider({ children }: { children: ReactNode }) {
 
       if (storedToken && storedPollId === pollId) {
         // Try to restore existing session
-        const existingSession = await getSessionByToken(storedToken);
-        if (existingSession && existingSession.poll_id === pollId) {
-          setSessionId(existingSession.id);
-          setSessionToken(storedToken);
-
-          // Load existing responses (group multiple responses per question into arrays)
-          const existingResponses = await getSessionResponses(existingSession.id);
-          const responseMap: Record<string, string | string[]> = {};
-          existingResponses.forEach((r) => {
-            const existing = responseMap[r.question_id];
-            if (existing) {
-              // Multiple responses for this question — use array
-              if (Array.isArray(existing)) {
-                existing.push(r.answer_option_id);
-              } else {
-                responseMap[r.question_id] = [existing, r.answer_option_id];
-              }
-            } else {
-              responseMap[r.question_id] = r.answer_option_id;
-            }
-          });
-          setResponses(responseMap);
-          return;
+        try {
+          const existing = await getSession(storedToken);
+          if (existing.session.poll_id === pollId) {
+            setSessionId(existing.session.id);
+            setSessionToken(storedToken);
+            setResponses(toResponseMap(existing.responses));
+            return;
+          }
+        } catch {
+          // Session expired or was removed; start a new one
         }
       }
 
-      // Create new session
-      const newToken = generateSessionToken();
-      const session = await createSession(pollId, newToken);
-
-      if (session) {
-        setSessionId(session.id);
-        setSessionToken(newToken);
-        localStorage.setItem('session_token', newToken);
-        localStorage.setItem('session_poll_id', pollId);
-        setResponses({});
-      }
+      // Create new session (the server issues the token)
+      const session = await createSession(pollId);
+      setSessionId(session.id);
+      setSessionToken(session.session_token);
+      localStorage.setItem('session_token', session.session_token);
+      localStorage.setItem('session_poll_id', pollId);
+      setResponses({});
+    } catch (error) {
+      console.error('Failed to start session:', error);
     } finally {
       setLoading(false);
     }
   }, []);
 
+  // Save to the server; if it's rejected (e.g. the poll just closed), resync from the server
+  const persist = useCallback(async (questionId: string, answerOptionIds: string[]) => {
+    if (!sessionToken) return;
+    try {
+      await submitAnswers(sessionToken, questionId, answerOptionIds);
+    } catch (error) {
+      console.error('Failed to save answer:', error);
+      try {
+        setResponses(toResponseMap((await getSession(sessionToken)).responses));
+      } catch {
+        // Leave the optimistic state; the next refresh will correct it
+      }
+    }
+  }, [sessionToken]);
+
   const saveResponse = useCallback(async (questionId: string, answerOptionId: string) => {
-    if (!sessionId) return;
+    if (!sessionToken) return;
 
     // Optimistically update UI
     setResponses(prev => ({
@@ -99,12 +101,11 @@ export function SessionProvider({ children }: { children: ReactNode }) {
       [questionId]: answerOptionId
     }));
 
-    // Persist to database
-    await submitResponse(sessionId, questionId, answerOptionId);
-  }, [sessionId]);
+    await persist(questionId, [answerOptionId]);
+  }, [sessionToken, persist]);
 
   const saveMultiResponse = useCallback(async (questionId: string, answerOptionIds: string[]) => {
-    if (!sessionId) return;
+    if (!sessionToken) return;
 
     // Optimistically update UI
     setResponses(prev => ({
@@ -112,9 +113,8 @@ export function SessionProvider({ children }: { children: ReactNode }) {
       [questionId]: answerOptionIds.length === 1 ? answerOptionIds[0] : answerOptionIds
     }));
 
-    // Persist to database
-    await submitMultiResponse(sessionId, questionId, answerOptionIds);
-  }, [sessionId]);
+    await persist(questionId, answerOptionIds);
+  }, [sessionToken, persist]);
 
   const clearSession = useCallback(() => {
     setSessionId(null);
@@ -128,26 +128,16 @@ export function SessionProvider({ children }: { children: ReactNode }) {
     setResponses({});
   }, []);
 
+  // Reload this participant's answers (e.g. after the admin resets the poll)
   const refreshResponses = useCallback(async () => {
-    if (!sessionId) return;
-
-    // Reload responses from database (group multiple responses per question)
-    const existingResponses = await getSessionResponses(sessionId);
-    const responseMap: Record<string, string | string[]> = {};
-    existingResponses.forEach((r) => {
-      const existing = responseMap[r.question_id];
-      if (existing) {
-        if (Array.isArray(existing)) {
-          existing.push(r.answer_option_id);
-        } else {
-          responseMap[r.question_id] = [existing, r.answer_option_id];
-        }
-      } else {
-        responseMap[r.question_id] = r.answer_option_id;
-      }
-    });
-    setResponses(responseMap);
-  }, [sessionId]);
+    if (!sessionToken || !sessionId) return;
+    try {
+      const existing = await getSession(sessionToken);
+      setResponses(toResponseMap(existing.responses));
+    } catch {
+      // Keep current answers on a transient failure
+    }
+  }, [sessionToken, sessionId]);
 
   return (
     <SessionContext.Provider value={{
@@ -167,6 +157,7 @@ export function SessionProvider({ children }: { children: ReactNode }) {
   );
 }
 
+// eslint-disable-next-line react-refresh/only-export-components
 export function useSession() {
   const context = useContext(SessionContext);
   if (!context) {

@@ -1,7 +1,17 @@
 import { useEffect, useState } from 'react';
 import { useParams, useNavigate, Link } from 'react-router-dom';
 import { useAdmin } from '../../contexts/AdminContext';
-import { supabase, getQuestionsForPoll, getParticipantCount } from '../../services/supabase';
+import {
+  addQuestion,
+  deleteQuestion,
+  getParticipantCount,
+  getPollForEditing,
+  resetPollResponses,
+  setAllQuestionsVisible,
+  updatePoll,
+  updateQuestion,
+  type QuestionUpdate
+} from '../../services/api';
 import { Loading } from '../common/Loading';
 import { QuestionEditor } from './QuestionEditor';
 import type { Poll, Question } from '../../types';
@@ -30,27 +40,16 @@ export function PollEditor() {
     async function loadPoll() {
       if (!pollId) return;
 
-      const { data: pollData } = await supabase
-        .from('polls')
-        .select('*')
-        .eq('id', pollId)
-        .single();
-
-      if (!pollData) {
+      try {
+        const data = await getPollForEditing(pollId);
+        setPoll(data.poll);
+        setTitleInput(data.poll.title);
+        setQuestions(data.questions);
+        setParticipantCount(data.participant_count);
+        setLoading(false);
+      } catch {
         navigate('/admin/dashboard');
-        return;
       }
-
-      setPoll(pollData);
-      setTitleInput(pollData.title);
-
-      const questionsData = await getQuestionsForPoll(pollId);
-      setQuestions(questionsData);
-
-      const count = await getParticipantCount(pollId);
-      setParticipantCount(count);
-
-      setLoading(false);
     }
 
     if (isAuthenticated) {
@@ -58,167 +57,92 @@ export function PollEditor() {
     }
   }, [pollId, isAuthenticated, navigate]);
 
-  // Subscribe to response updates for participant count
+  // Refresh participant count periodically
   useEffect(() => {
-    if (!pollId) return;
+    if (!pollId || !isAuthenticated) return;
 
     const interval = setInterval(async () => {
-      const count = await getParticipantCount(pollId);
-      setParticipantCount(count);
+      try {
+        setParticipantCount(await getParticipantCount(pollId));
+      } catch {
+        // Keep the last known count
+      }
     }, 5000);
 
     return () => clearInterval(interval);
-  }, [pollId]);
+  }, [pollId, isAuthenticated]);
 
-  const handleStateChange = async (newState: Poll['state']) => {
-    if (!poll) return;
-    const { data, error } = await supabase
-      .from('polls')
-      .update({ state: newState })
-      .eq('id', poll.id)
-      .select()
-      .single();
-
-    if (data && !error) {
-      setPoll(data);
+  // Runs an edit; surfaces failures instead of silently diverging from the server
+  async function attempt(action: () => Promise<void>) {
+    try {
+      await action();
+    } catch (error) {
+      alert((error as Error).message);
     }
-  };
+  }
 
-  const handleReset = async () => {
+  const handleStateChange = (newState: Poll['state']) => attempt(async () => {
+    if (!poll) return;
+    setPoll(await updatePoll(poll.id, { state: newState }));
+  });
+
+  const handleReset = () => attempt(async () => {
     if (!poll) return;
     if (!confirm('Are you sure you want to clear all responses? This cannot be undone.')) return;
 
-    // Delete all responses for this poll's questions
-    const questionIds = questions.map(q => q.id);
-    if (questionIds.length > 0) {
-      await supabase
-        .from('responses')
-        .delete()
-        .in('question_id', questionIds);
-    }
+    await resetPollResponses(poll.id);
     alert('All responses have been cleared.');
-  };
+  });
 
   const handleTitleSave = async () => {
     if (!poll || !titleInput.trim()) return;
-    const { data, error } = await supabase
-      .from('polls')
-      .update({ title: titleInput.trim() })
-      .eq('id', poll.id)
-      .select()
-      .single();
-
-    if (data && !error) {
-      setPoll(data);
-    }
+    await attempt(async () => {
+      setPoll(await updatePoll(poll.id, { title: titleInput.trim() }));
+    });
     setEditingTitle(false);
   };
 
-  const handleAddQuestion = async () => {
+  const handleAddQuestion = () => attempt(async () => {
     if (!poll) return;
+    setQuestions(await addQuestion(poll.id));
+  });
 
-    // Get next question order
-    const nextOrder = questions.length;
-
-    // Create question
-    const { data: questionData, error: questionError } = await supabase
-      .from('questions')
-      .insert({
-        poll_id: poll.id,
-        question_text: 'New Question',
-        question_order: nextOrder,
-        chart_type: 'horizontal_bar'
-      })
-      .select()
-      .single();
-
-    if (questionData && !questionError) {
-      // Create default answer options
-      await supabase
-        .from('answer_options')
-        .insert([
-          { question_id: questionData.id, option_text: 'Option 1', option_order: 0 },
-          { question_id: questionData.id, option_text: 'Option 2', option_order: 1 }
-        ]);
-
-      // Reload questions
-      const questionsData = await getQuestionsForPoll(poll.id);
-      setQuestions(questionsData);
-    }
-  };
-
-  const handleQuestionUpdate = async (questionId: string, updates: Partial<Question>) => {
-    await supabase
-      .from('questions')
-      .update(updates)
-      .eq('id', questionId);
-
+  const applyQuestionUpdate = (questionId: string, updates: QuestionUpdate) => attempt(async () => {
+    await updateQuestion(questionId, updates);
     setQuestions(prev =>
       prev.map(q => q.id === questionId ? { ...q, ...updates } : q)
     );
-  };
+  });
 
-  const handleQuestionDelete = async (questionId: string) => {
+  const handleQuestionUpdate = (questionId: string, updates: Partial<Question>) =>
+    applyQuestionUpdate(questionId, updates as QuestionUpdate);
+
+  const handleQuestionDelete = (questionId: string) => attempt(async () => {
     if (!confirm('Delete this question?')) return;
 
-    await supabase
-      .from('questions')
-      .delete()
-      .eq('id', questionId);
-
+    await deleteQuestion(questionId);
     setQuestions(prev => prev.filter(q => q.id !== questionId));
-  };
+  });
 
-  const handleRevealQuestion = async (questionId: string, isRevealed: boolean) => {
-    await supabase
-      .from('questions')
-      .update({ is_revealed: isRevealed })
-      .eq('id', questionId);
+  const handleRevealQuestion = (questionId: string, isRevealed: boolean) =>
+    applyQuestionUpdate(questionId, { is_revealed: isRevealed });
 
-    setQuestions(prev =>
-      prev.map(q => q.id === questionId ? { ...q, is_revealed: isRevealed } : q)
-    );
-  };
+  const handleToggleVisibility = (questionId: string, isVisible: boolean) =>
+    applyQuestionUpdate(questionId, { is_visible: isVisible });
 
-  const handleToggleVisibility = async (questionId: string, isVisible: boolean) => {
-    await supabase
-      .from('questions')
-      .update({ is_visible: isVisible })
-      .eq('id', questionId);
-
-    setQuestions(prev =>
-      prev.map(q => q.id === questionId ? { ...q, is_visible: isVisible } : q)
-    );
-  };
-
-  const handleRevealAll = async (reveal: boolean) => {
+  const handleRevealAll = (reveal: boolean) => attempt(async () => {
     if (!poll) return;
-    const { data, error } = await supabase
-      .from('polls')
-      .update({ results_revealed: reveal })
-      .eq('id', poll.id)
-      .select()
-      .single();
+    setPoll(await updatePoll(poll.id, { results_revealed: reveal }));
+  });
 
-    if (data && !error) {
-      setPoll(data);
-    }
-  };
+  const handleShowAllQuestions = (visible: boolean) => attempt(async () => {
+    if (!poll || questions.length === 0) return;
 
-  const handleShowAllQuestions = async (visible: boolean) => {
-    if (!poll) return;
-    const questionIds = questions.map(q => q.id);
-    if (questionIds.length === 0) return;
-
-    await supabase
-      .from('questions')
-      .update({ is_visible: visible })
-      .in('id', questionIds);
-
+    await setAllQuestionsVisible(poll.id, visible);
     setQuestions(prev =>
       prev.map(q => ({ ...q, is_visible: visible }))
     );
-  };
+  });
 
   const votingUrl = poll ? `${window.location.origin}/vote/${poll.slug || poll.access_code}` : '';
   const resultsUrl = poll ? `${window.location.origin}/results/${poll.slug || poll.access_code}` : '';

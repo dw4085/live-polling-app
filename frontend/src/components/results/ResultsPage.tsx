@@ -1,12 +1,6 @@
 import { useEffect, useState, useMemo } from 'react';
 import { useParams } from 'react-router-dom';
-import {
-  getPollByCode,
-  getQuestionsForPoll,
-  getResponseCounts,
-  subscribeToPollState,
-  subscribeToQuestions
-} from '../../services/supabase';
+import { getLiveState } from '../../services/api';
 import { Loading } from '../common/Loading';
 import { SingleQuestionChart } from './SingleQuestionChart';
 import { CrossTabChart } from './CrossTabChart';
@@ -28,59 +22,37 @@ export function ResultsPage() {
     async function loadData() {
       if (!code) return;
 
-      const pollData = await getPollByCode(code);
-      if (!pollData) {
+      try {
+        const live = await getLiveState(code);
+        setPoll(live.poll);
+        setQuestions(live.questions);
+        setResponseCounts(live.counts);
+      } catch {
         setError('Poll not found');
-        setLoading(false);
-        return;
       }
-
-      setPoll(pollData);
-
-      const questionsData = await getQuestionsForPoll(pollData.id);
-      setQuestions(questionsData);
-
-      const counts = await getResponseCounts(pollData.id);
-      setResponseCounts(counts);
-
       setLoading(false);
     }
 
     loadData();
   }, [code]);
 
-  // Subscribe to real-time updates
+  // Refresh poll state, questions and counts every second for a live effect
   useEffect(() => {
-    if (!poll) return;
+    if (!poll?.id || !code) return;
 
-    // Refresh counts periodically for real-time effect
     const interval = setInterval(async () => {
-      const counts = await getResponseCounts(poll.id);
-      setResponseCounts(counts);
+      try {
+        const live = await getLiveState(code);
+        setPoll(live.poll);
+        setQuestions(live.questions);
+        setResponseCounts(live.counts);
+      } catch {
+        // transient failure; try again next tick
+      }
     }, 1000);
 
-    const pollSub = subscribeToPollState(poll.id, (updatedPoll) => {
-      setPoll(updatedPoll);
-    });
-
-    const questionsSub = subscribeToQuestions(poll.id, (updatedQuestion) => {
-      setQuestions(prev => {
-        const index = prev.findIndex(q => q.id === updatedQuestion.id);
-        if (index >= 0) {
-          const newQuestions = [...prev];
-          newQuestions[index] = { ...newQuestions[index], ...updatedQuestion };
-          return newQuestions;
-        }
-        return prev;
-      });
-    });
-
-    return () => {
-      clearInterval(interval);
-      pollSub.unsubscribe();
-      questionsSub.unsubscribe();
-    };
-  }, [poll?.id]);
+    return () => clearInterval(interval);
+  }, [poll?.id, code]);
 
   // Filter to only show revealed questions
   const revealedQuestions = useMemo(() => {
@@ -225,7 +197,7 @@ export function ResultsPage() {
                 <CrossTabChart
                   question1={questions.find(q => q.id === crossTabQuestions[0])!}
                   question2={questions.find(q => q.id === crossTabQuestions[1])!}
-                  pollId={poll!.id}
+                  pollCode={code!}
                   presentationMode={presentationMode}
                 />
               </div>

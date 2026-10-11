@@ -1,121 +1,96 @@
-# Live Polling App
+# PollAnywhere (Live Polling App)
 
-A real-time polling application for classroom use at Columbia Business School.
+A real-time polling application for classroom use at Columbia Business School — an
+alternative to Poll Everywhere.
 
 ## Features
 
-- Create multiple-choice polls with unlimited questions
-- Real-time voting with instant results updates
-- Cross-tabulation analysis for comparing two questions
-- Mobile-optimized voting interface
-- Presentation mode for large screen display
-- Admin controls for poll state and results reveal
+- Create multiple-choice polls with unlimited questions (single answer or "check all that apply")
+- Reveal questions to participants one at a time, and reveal results per question or all at once
+- Live results for a projector, with presentation mode and cross-tabulation of two questions
+- Mobile-optimized, anonymous voting (no login for participants)
+- Multiple admins: anyone can request access with Google; a superadmin approves requests
 
 ## Tech Stack
 
-- **Frontend**: React + TypeScript + Vite + Tailwind CSS
-- **Backend**: Python (Vercel Serverless Functions)
-- **Database**: Supabase (PostgreSQL + Real-time)
-- **Charts**: Recharts
+- **Frontend**: React + TypeScript + Vite + Tailwind CSS + Recharts (`frontend/`)
+- **API**: Vercel serverless functions in TypeScript (`api/`)
+- **Database**: Neon Postgres via the `@neondatabase/serverless` HTTP driver
+- **Admin auth**: Neon Auth (Google sign-in) plus a superadmin password
 - **Hosting**: Vercel
+
+The browser never talks to the database: every read and write goes through `api/app.ts`.
+Live updates come from polling (pages refresh poll state every second; the shared
+poll-state response is cached at the Vercel CDN for one second, so a full classroom
+costs about one function call per second).
 
 ## Setup
 
-### 1. Create a Supabase Project
+1. Create a Neon project and run `schema.sql` in the Neon SQL Editor. It seeds the
+   superadmin (`djw2104@columbia.edu`); edit the last statement to use a different one.
+2. In Neon Console → Auth, enable Neon Auth with Google, and add your site's URL
+   (e.g. `https://your-app.vercel.app`) under trusted domains.
+3. Set the environment variables listed in `.env.example` in Vercel.
+4. Deploy (Vercel builds `frontend/` and the functions in `api/` per `vercel.json`).
 
-1. Go to [supabase.com](https://supabase.com) and create a new project
-2. Go to the SQL Editor and run the schema from `supabase/migrations/001_initial_schema.sql`
-3. Copy your project URL and API keys from Settings > API
-
-### 2. Configure Environment
-
-```bash
-cp .env.example .env
-```
-
-Edit `.env` with your Supabase credentials:
-
-```
-VITE_SUPABASE_URL=https://your-project.supabase.co
-VITE_SUPABASE_ANON_KEY=your-anon-key
-SUPABASE_URL=https://your-project.supabase.co
-SUPABASE_ANON_KEY=your-anon-key
-SUPABASE_SERVICE_KEY=your-service-key
-ADMIN_PASSWORD_HASH=your-bcrypt-hash
-JWT_SECRET=your-random-secret
-```
-
-Generate password hash:
-```bash
-python -c "import bcrypt; print(bcrypt.hashpw(b'your-password', bcrypt.gensalt()).decode())"
-```
-
-### 3. Install Dependencies
+### Run locally
 
 ```bash
-cd frontend
-npm install
+npm install && (cd frontend && npm install)
+vercel env pull .env.local   # or fill in .env.local from .env.example
+vercel dev                   # serves the frontend and the /api functions
 ```
 
-### 4. Run Locally
-
-```bash
-npm run dev
-```
-
-Visit http://localhost:5173
-
-## Deployment
-
-### Deploy to Vercel
-
-1. Connect your GitHub repository to Vercel
-2. Add environment variables in Vercel dashboard
-3. Deploy
+`cd frontend && npm run dev` serves the UI alone (without the API).
 
 ## Usage
 
-### Admin
+### Admins
 
-1. Go to `/admin` and enter your password
-2. Create a new poll and add questions
-3. Set poll state to "Open" to allow voting
-4. Share the voting link with participants
-5. Project the results link on a big screen
-6. Reveal results when ready
+1. Go to `/admin`. The superadmin can sign in with the password; everyone signs in with Google.
+2. New admins click "Request access", sign in with Google, and wait for a superadmin to approve them.
+3. Create a poll and add questions; set the poll to "Open" and use "Show All" (or the per-question
+   eye toggle) to reveal questions to participants.
+4. Share the voting link and project the results link; reveal results when ready.
 
 ### Participants
 
-1. Open the voting link on any device
-2. Answer all questions
-3. Wait for results to be revealed
+1. Open the voting link on any device and answer the visible questions
+2. Answers can be changed until the poll closes
 
-### Results Display
+### Results display
 
 1. Open the results link
 2. Toggle "Presentation Mode" for large screens
 3. Select two questions for cross-tabulation analysis
+
+## API
+
+| Route | Auth | Purpose |
+|---|---|---|
+| `GET /api/live/:code` | public | Poll, questions and revealed counts for the voting/results pages |
+| `GET /api/live/:code/crosstab?q1&q2` | public | Anonymous answers to two revealed questions |
+| `POST /api/sessions`, `GET /api/sessions/:token` | public | Start / restore a participant session |
+| `POST /api/responses` | session token | Replace a participant's answer(s) to one question |
+| `GET /api/admin/me`, `POST /api/admin/login`, `POST /api/admin/logout`, `POST /api/admin/signup` | — | Admin identity |
+| `/api/admin/polls…`, `/api/admin/questions…`, `/api/admin/options…` | approved admin (own polls; superadmin: all) | Poll editing |
+| `/api/admin/admins…` | superadmin | Approve, reject and delete admins |
+| `/api/auth/*` | — | Same-origin proxy to Neon Auth |
 
 ## Project Structure
 
 ```
 live-polling-app/
 ├── frontend/           # React application
-│   ├── src/
-│   │   ├── components/ # UI components
-│   │   ├── contexts/   # React contexts
-│   │   ├── services/   # API & Supabase clients
-│   │   └── types/      # TypeScript types
-│   └── package.json
-├── api/                # Python serverless functions
-│   ├── admin/          # Admin authentication
-│   ├── polls/          # Poll CRUD
-│   ├── questions/      # Question CRUD
-│   ├── responses/      # Vote submission
-│   ├── sessions/       # Participant sessions
-│   └── utils/          # Shared utilities
-├── supabase/           # Database migrations
-└── vercel.json         # Deployment config
+│   └── src/
+│       ├── components/ # UI components (admin, voting, results)
+│       ├── contexts/   # Admin identity and participant session
+│       ├── services/   # API client (api.ts) and Neon Auth client (auth.ts)
+│       └── types/      # TypeScript types
+├── api/                # Vercel functions: app.ts (all data), auth.ts (Neon Auth proxy)
+│   └── _lib/           # db, auth and HTTP helpers
+├── schema.sql          # Database schema
+└── vercel.json         # Build + rewrites
 ```
 
 ## License

@@ -1,22 +1,12 @@
 import { useEffect, useState } from 'react';
 import { useNavigate, Link } from 'react-router-dom';
 import { useAdmin } from '../../contexts/AdminContext';
-import { supabase } from '../../services/supabase';
+import { createPoll, deletePoll, listAdmins, listPolls } from '../../services/api';
 import { Loading } from '../common/Loading';
 import { ManageAdmins } from './ManageAdmins';
 import type { Poll } from '../../types';
 
 type Tab = 'polls' | 'admins';
-
-// Generate random access code
-function generateAccessCode(length = 8): string {
-  const chars = 'abcdefghjkmnpqrstuvwxyz23456789';
-  let code = '';
-  for (let i = 0; i < length; i++) {
-    code += chars[Math.floor(Math.random() * chars.length)];
-  }
-  return code;
-}
 
 export function AdminDashboard() {
   const { isAuthenticated, loading: authLoading, admin, isSuperadmin, isPending, logout } = useAdmin();
@@ -40,48 +30,21 @@ export function AdminDashboard() {
     }
   }, [isAuthenticated, authLoading, isPending, navigate]);
 
-  // Load polls
+  // Load polls (the server returns all polls for a superadmin, otherwise your own)
   useEffect(() => {
-    async function loadPolls() {
-      if (!admin) return;
-
-      let query = supabase
-        .from('polls')
-        .select('*')
-        .neq('state', 'archived')
-        .order('created_at', { ascending: false });
-
-      // Filter by admin_id unless superadmin
-      if (!isSuperadmin) {
-        query = query.eq('admin_id', admin.id);
-      }
-
-      const { data } = await query;
-      setPolls(data || []);
-      setLoading(false);
-    }
-
-    if (isAuthenticated && admin) {
-      loadPolls();
-    }
-  }, [isAuthenticated, admin, isSuperadmin]);
+    if (!isAuthenticated || !admin || isPending) return;
+    listPolls()
+      .then(setPolls)
+      .catch((error) => console.error('Failed to load polls:', error))
+      .finally(() => setLoading(false));
+  }, [isAuthenticated, admin, isPending]);
 
   // Load pending admin count for superadmin
   useEffect(() => {
-    async function loadPendingCount() {
-      if (!isSuperadmin) return;
-
-      const { count } = await supabase
-        .from('admins')
-        .select('*', { count: 'exact', head: true })
-        .eq('status', 'pending');
-
-      setPendingAdminCount(count || 0);
-    }
-
-    if (isSuperadmin) {
-      loadPendingCount();
-    }
+    if (!isSuperadmin) return;
+    listAdmins()
+      .then((admins) => setPendingAdminCount(admins.filter(a => a.status === 'pending').length))
+      .catch((error) => console.error('Failed to load admins:', error));
   }, [isSuperadmin]);
 
   const handleCreatePoll = async (e: React.FormEvent) => {
@@ -89,22 +52,10 @@ export function AdminDashboard() {
     if (!newPollTitle.trim() || !admin) return;
 
     setCreating(true);
-
-    // Create poll directly with Supabase
-    const { data, error } = await supabase
-      .from('polls')
-      .insert({
-        title: newPollTitle.trim(),
-        access_code: generateAccessCode(),
-        state: 'draft',
-        admin_id: admin.id
-      })
-      .select()
-      .single();
-
-    if (data && !error) {
-      navigate(`/admin/poll/${data.id}`);
-    } else {
+    try {
+      const poll = await createPoll(newPollTitle.trim());
+      navigate(`/admin/poll/${poll.id}`);
+    } catch (error) {
       console.error('Failed to create poll:', error);
       alert('Failed to create poll. Please try again.');
     }
@@ -114,13 +65,11 @@ export function AdminDashboard() {
   const handleDeletePoll = async (pollId: string) => {
     if (!confirm('Are you sure you want to delete this poll?')) return;
 
-    const { error } = await supabase
-      .from('polls')
-      .delete()
-      .eq('id', pollId);
-
-    if (!error) {
+    try {
+      await deletePoll(pollId);
       setPolls(polls.filter(p => p.id !== pollId));
+    } catch (error) {
+      alert((error as Error).message);
     }
   };
 
@@ -154,7 +103,7 @@ export function AdminDashboard() {
               </div>
             </div>
             <button
-              onClick={logout}
+              onClick={async () => { await logout(); navigate('/admin'); }}
               className="text-columbia-blue hover:text-white transition-colors"
             >
               Logout

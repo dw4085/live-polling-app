@@ -1,0 +1,17 @@
+{
+  "name": "live-polling-app-api",
+  "private": true,
+  "type": "module",
+  "description": "Vercel serverless API for PollAnywhere (the frontend lives in frontend/)",
+  "scripts": {
+    "typecheck": "tsc --noEmit -p ."
+  },
+  "dependencies": {
+    "@neondatabase/auth": "0.5.0-beta",
+    "@neondatabase/serverless": "^1.2.0"
+  },
+  "devDependencies": {
+    "@types/node": "^24.10.1",
+    "typescript": "~5.9.3"
+  }
+}
