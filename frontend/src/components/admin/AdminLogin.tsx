@@ -3,16 +3,14 @@ import { useNavigate, Link } from 'react-router-dom';
 import { useAdmin } from '../../contexts/AdminContext';
 import { Loading } from '../common/Loading';
 
-type LoginMode = 'password' | 'magic-link';
+type LoginMode = 'password' | 'google';
 
 export function AdminLogin() {
   const [mode, setMode] = useState<LoginMode>('password');
   const [password, setPassword] = useState('');
-  const [email, setEmail] = useState('');
   const [error, setError] = useState('');
-  const [success, setSuccess] = useState(false);
   const [submitting, setSubmitting] = useState(false);
-  const { isAuthenticated, loading, isPending, loginWithPassword, loginWithMagicLink } = useAdmin();
+  const { isAuthenticated, loading, isPending, loginWithPassword, loginWithGoogle } = useAdmin();
   const navigate = useNavigate();
 
   // Redirect if already authenticated
@@ -40,47 +38,20 @@ export function AdminLogin() {
     setSubmitting(false);
   };
 
-  const handleMagicLinkSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
+  const handleGoogleSignIn = async () => {
     setError('');
     setSubmitting(true);
 
-    const result = await loginWithMagicLink(email);
-    if (result.success) {
-      setSuccess(true);
-    } else {
-      setError(result.error || 'Failed to send magic link');
+    // Redirects to Google and back to /admin/auth/callback on success
+    const result = await loginWithGoogle();
+    if (!result.success) {
+      setError(result.error || 'Google sign-in failed');
+      setSubmitting(false);
     }
-    setSubmitting(false);
   };
 
   if (loading) {
     return <Loading />;
-  }
-
-  if (success) {
-    return (
-      <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-navy to-navy-dark">
-        <div className="bg-white rounded-2xl shadow-2xl p-8 max-w-md w-full mx-4 text-center">
-          <div className="text-6xl mb-4">📧</div>
-          <h1 className="text-2xl font-bold text-gray-900 mb-4">Check Your Email</h1>
-          <p className="text-gray-600 mb-6">
-            We've sent a magic link to <strong>{email}</strong>.
-            <br /><br />
-            Click the link in the email to sign in.
-          </p>
-          <button
-            onClick={() => {
-              setSuccess(false);
-              setEmail('');
-            }}
-            className="text-navy hover:underline"
-          >
-            Try a different email
-          </button>
-        </div>
-      </div>
-    );
   }
 
   return (
@@ -107,14 +78,14 @@ export function AdminLogin() {
           </button>
           <button
             type="button"
-            onClick={() => { setMode('magic-link'); setError(''); }}
+            onClick={() => { setMode('google'); setError(''); }}
             className={`flex-1 py-2 text-sm font-medium rounded-md transition-colors ${
-              mode === 'magic-link'
+              mode === 'google'
                 ? 'bg-white text-navy shadow-sm'
                 : 'text-gray-500 hover:text-gray-700'
             }`}
           >
-            Magic Link
+            Google
           </button>
         </div>
 
@@ -153,24 +124,10 @@ export function AdminLogin() {
             </button>
           </form>
         ) : (
-          <form onSubmit={handleMagicLinkSubmit}>
-            <div className="mb-6">
-              <label htmlFor="email" className="block text-sm font-medium text-gray-700 mb-2">
-                Email
-              </label>
-              <input
-                id="email"
-                type="email"
-                value={email}
-                onChange={(e) => setEmail(e.target.value)}
-                placeholder="your.email@example.com"
-                className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-navy focus:border-transparent"
-                autoFocus
-              />
-              <p className="text-xs text-gray-400 mt-2">
-                We'll send you a magic link to sign in
-              </p>
-            </div>
+          <div>
+            <p className="text-sm text-gray-600 mb-6">
+              Admins sign in with the Google account they requested access with.
+            </p>
 
             {error && (
               <div className="mb-4 p-3 bg-red-50 border border-red-200 rounded-lg text-red-600 text-sm">
@@ -179,13 +136,14 @@ export function AdminLogin() {
             )}
 
             <button
-              type="submit"
-              disabled={submitting || !email}
+              type="button"
+              onClick={handleGoogleSignIn}
+              disabled={submitting}
               className="w-full py-3 bg-navy text-white rounded-lg font-medium hover:bg-navy-light transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
             >
-              {submitting ? 'Sending...' : 'Send Magic Link'}
+              {submitting ? 'Redirecting...' : 'Sign in with Google'}
             </button>
-          </form>
+          </div>
         )}
 
         <div className="mt-6 text-center text-sm text-gray-500">

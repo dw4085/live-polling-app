@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { supabase } from '../../services/supabase';
+import { addOption, deleteOption, updateOption } from '../../services/api';
 import type { Question, ChartType, AnswerOption } from '../../types';
 
 interface QuestionEditorProps {
@@ -56,34 +56,21 @@ export function QuestionEditor({
   const handleAddOption = async () => {
     if (!newOptionText.trim()) return;
 
-    const newOrder = options.length;
-
-    // Save to database
-    const { data, error } = await supabase
-      .from('answer_options')
-      .insert({
-        question_id: question.id,
-        option_text: newOptionText.trim(),
-        option_order: newOrder
-      })
-      .select()
-      .single();
-
-    if (data && !error) {
-      setOptions([...options, data]);
+    try {
+      const option = await addOption(question.id, newOptionText.trim());
+      setOptions([...options, option]);
       setNewOptionText('');
+    } catch (error) {
+      alert((error as Error).message);
     }
   };
 
   const handleRemoveOption = async (optionId: string) => {
-    // Delete from database
-    const { error } = await supabase
-      .from('answer_options')
-      .delete()
-      .eq('id', optionId);
-
-    if (!error) {
+    try {
+      await deleteOption(optionId);
       setOptions(options.filter(o => o.id !== optionId));
+    } catch (error) {
+      alert((error as Error).message);
     }
   };
 
@@ -95,11 +82,13 @@ export function QuestionEditor({
   };
 
   const handleOptionBlur = async (optionId: string, text: string) => {
-    // Save to database when input loses focus
-    await supabase
-      .from('answer_options')
-      .update({ option_text: text })
-      .eq('id', optionId);
+    // Save when input loses focus
+    if (!text.trim()) return;
+    try {
+      await updateOption(optionId, text);
+    } catch (error) {
+      alert((error as Error).message);
+    }
   };
 
   return (

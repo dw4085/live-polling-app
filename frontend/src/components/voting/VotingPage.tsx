@@ -1,10 +1,8 @@
-import { useEffect, useState, useCallback } from 'react';
-import { useParams, useNavigate } from 'react-router-dom';
+import { useEffect, useRef, useState, useCallback } from 'react';
+import { useParams } from 'react-router-dom';
 import { useSession } from '../../contexts/SessionContext';
-import { getPollByCode, getQuestionsForPoll, getResponseCounts, subscribeToQuestions, subscribeToPollState } from '../../services/supabase';
-import { verifyPollPassword } from '../../services/api';
+import { getLiveState } from '../../services/api';
 import { Loading } from '../common/Loading';
-import { PasswordModal } from '../common/PasswordModal';
 import { QuestionCard } from './QuestionCard';
 import { ProgressIndicator } from './ProgressIndicator';
 import { SingleQuestionChart } from '../results/SingleQuestionChart';
@@ -12,122 +10,82 @@ import type { Poll, Question, ResponseCount } from '../../types';
 
 export function VotingPage() {
   const { code } = useParams<{ code: string }>();
-  const navigate = useNavigate();
   const { initSession, responses, loading: sessionLoading, refreshResponses } = useSession();
 
   const [poll, setPoll] = useState<Poll | null>(null);
   const [questions, setQuestions] = useState<Question[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [showPasswordModal, setShowPasswordModal] = useState(false);
-  const [passwordVerified, setPasswordVerified] = useState(false);
   const [responseCounts, setResponseCounts] = useState<ResponseCount[]>([]);
   const [expandedResults, setExpandedResults] = useState<Record<string, boolean>>({});
+
+  // Last seen poll.updated_at; a change (e.g. an admin reset) triggers reloading our answers
+  const pollVersion = useRef<string | null>(null);
 
   // Load poll data
   useEffect(() => {
     async function loadPoll() {
       if (!code) return;
 
-      const pollData = await getPollByCode(code);
-      if (!pollData) {
+      let live;
+      try {
+        live = await getLiveState(code);
+      } catch {
         setError('Poll not found');
         setLoading(false);
         return;
       }
 
-      if (pollData.state !== 'open') {
-        setError(pollData.state === 'closed' ? 'This poll has ended' : 'This poll is not available');
+      if (live.poll.state !== 'open') {
+        setError(live.poll.state === 'closed' ? 'This poll has ended' : 'This poll is not available');
         setLoading(false);
         return;
       }
 
-      setPoll(pollData);
-
-      // Check if password required
-      if (pollData.password_hash && !passwordVerified) {
-        setShowPasswordModal(true);
-        setLoading(false);
-        return;
-      }
-
-      // Load questions
-      const questionsData = await getQuestionsForPoll(pollData.id);
-      setQuestions(questionsData);
+      pollVersion.current = live.poll.updated_at;
+      setPoll(live.poll);
+      setQuestions(live.questions);
+      setResponseCounts(live.counts);
 
       // Initialize session
-      await initSession(pollData.id);
+      await initSession(live.poll.id);
 
       setLoading(false);
     }
 
     loadPoll();
-  }, [code, passwordVerified, initSession]);
+  }, [code, initSession]);
 
-  // Subscribe to real-time updates and poll for changes
+  // Poll for changes every second (question visibility, reveals, state, resets)
   useEffect(() => {
-    if (!poll) return;
+    if (!poll?.id || !code) return;
 
-    const questionsSub = subscribeToQuestions(poll.id, (updatedQuestion) => {
-      setQuestions(prev => {
-        const index = prev.findIndex(q => q.id === updatedQuestion.id);
-        if (index >= 0) {
-          const newQuestions = [...prev];
-          newQuestions[index] = { ...newQuestions[index], ...updatedQuestion };
-          return newQuestions;
-        }
-        return prev;
-      });
-    });
+    const interval = setInterval(async () => {
+      let live;
+      try {
+        live = await getLiveState(code);
+      } catch {
+        return; // transient failure; try again next tick
+      }
 
-    const pollSub = subscribeToPollState(poll.id, async (updatedPoll) => {
-      setPoll(updatedPoll);
-      if (updatedPoll.state === 'closed') {
+      setPoll(live.poll);
+      if (live.poll.state === 'closed') {
         setError('This poll has ended');
       }
-    });
-
-    // Poll for changes every second (more reliable than subscriptions)
-    const interval = setInterval(async () => {
-      // Refetch poll to check for results_revealed changes
-      const pollData = await getPollByCode(code!);
-      if (pollData) {
-        setPoll(pollData);
-        if (pollData.state === 'closed') {
-          setError('This poll has ended');
-        }
-        // Fetch response counts if results are revealed
-        if (pollData.results_revealed) {
-          const counts = await getResponseCounts(pollData.id);
-          setResponseCounts(counts);
-        }
+      setQuestions(live.questions);
+      if (live.poll.results_revealed) {
+        setResponseCounts(live.counts);
       }
 
-      // Refetch questions to get visibility changes
-      const questionsData = await getQuestionsForPoll(poll.id);
-      setQuestions(questionsData);
-
       // Refresh responses to detect if admin reset them
-      await refreshResponses();
+      if (live.poll.updated_at !== pollVersion.current) {
+        pollVersion.current = live.poll.updated_at;
+        await refreshResponses();
+      }
     }, 1000);
 
-    return () => {
-      clearInterval(interval);
-      questionsSub.unsubscribe();
-      pollSub.unsubscribe();
-    };
+    return () => clearInterval(interval);
   }, [poll?.id, code, refreshResponses]);
-
-  const handlePasswordSubmit = useCallback(async (password: string): Promise<boolean> => {
-    if (!poll) return false;
-    const result = await verifyPollPassword(poll.id, password);
-    if (result.data?.valid) {
-      setPasswordVerified(true);
-      setShowPasswordModal(false);
-      return true;
-    }
-    return false;
-  }, [poll]);
 
   const toggleResultsExpand = (questionId: string) => {
     setExpandedResults(prev => ({
@@ -164,17 +122,6 @@ export function VotingPage() {
           <h1 className="text-2xl font-bold text-navy mb-4">{error}</h1>
           <p className="text-gray-600">Please check the link and try again.</p>
         </div>
-      </div>
-    );
-  }
-
-  if (showPasswordModal) {
-    return (
-      <div className="min-h-screen bg-gray-50">
-        <PasswordModal
-          onSubmit={handlePasswordSubmit}
-          onCancel={() => navigate('/')}
-        />
       </div>
     );
   }
