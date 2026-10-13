@@ -1,42 +1,37 @@
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
 import { SessionProvider } from './contexts/SessionContext';
-import { AdminProvider } from './contexts/AdminContext';
+import { UserProvider } from './contexts/UserContext';
+import type { HubUser } from './lib/hub';
 
 // Pages
 import { VotingPage } from './components/voting/VotingPage';
 import { ResultsPage } from './components/results/ResultsPage';
-import { AdminLogin } from './components/admin/AdminLogin';
-import { AdminSignup } from './components/admin/AdminSignup';
 import { AdminDashboard } from './components/admin/AdminDashboard';
 import { PollEditor } from './components/admin/PollEditor';
-import { AuthCallback } from './components/admin/AuthCallback';
-import { PendingApproval } from './components/admin/PendingApproval';
 import { NotFound } from './components/common/NotFound';
+import { StaffOnly } from './components/common/StaffOnly';
 
-function App() {
+function App({ user }: { user: HubUser }) {
   return (
     <BrowserRouter>
-      <AdminProvider>
+      <UserProvider user={user}>
         <SessionProvider>
           <Routes>
-            {/* Public routes */}
+            {/* Signed-in students */}
             <Route path="/vote/:code" element={<VotingPage />} />
             <Route path="/results/:code" element={<ResultsPage />} />
 
-            {/* Admin routes */}
-            <Route path="/admin" element={<AdminLogin />} />
-            <Route path="/admin/signup" element={<AdminSignup />} />
-            <Route path="/admin/auth/callback" element={<AuthCallback />} />
-            <Route path="/admin/pending" element={<PendingApproval />} />
-            <Route path="/admin/dashboard" element={<AdminDashboard />} />
-            <Route path="/admin/poll/:pollId" element={<PollEditor />} />
+            {/* Instructors and TAs */}
+            <Route path="/admin" element={<StaffOnly><AdminDashboard /></StaffOnly>} />
+            <Route path="/admin/poll/:pollId" element={<StaffOnly><PollEditor /></StaffOnly>} />
 
             {/* Redirects */}
+            <Route path="/admin/dashboard" element={<Navigate to="/admin" replace />} />
             <Route path="/" element={<Navigate to="/admin" replace />} />
             <Route path="*" element={<NotFound />} />
           </Routes>
         </SessionProvider>
-      </AdminProvider>
+      </UserProvider>
     </BrowserRouter>
   );
 }

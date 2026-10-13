@@ -1,24 +1,10 @@
 -- PollAnywhere - Neon Postgres schema
 -- Run once in the Neon SQL Editor for a fresh database.
--- (Consolidates the former supabase/migrations 001-004, minus Supabase RLS/realtime.)
-
--- ============================================
--- ADMINS
--- ============================================
-CREATE TABLE admins (
-    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    auth_user_id TEXT UNIQUE,
-    email VARCHAR(255) NOT NULL UNIQUE,
-    name VARCHAR(255) NOT NULL,
-    affiliation TEXT,
-    role VARCHAR(20) DEFAULT 'admin' CHECK (role IN ('admin', 'superadmin')),
-    status VARCHAR(20) DEFAULT 'pending' CHECK (status IN ('pending', 'approved', 'rejected')),
-    created_at TIMESTAMPTZ DEFAULT NOW(),
-    approved_at TIMESTAMPTZ,
-    approved_by UUID REFERENCES admins(id) ON DELETE SET NULL
-);
-
-CREATE INDEX idx_admins_status ON admins(status);
+-- (Consolidates the former supabase/migrations 001-004, minus Supabase RLS/realtime, and
+-- db/hub-migration.sql: sign-in through the class hub. Existing databases: run that file.)
+--
+-- Everyone signs in at the class hub; students and staff are identified by their hub person id
+-- (UUID). The hub's instructors and TAs run polls, so there is no admins table.
 
 -- ============================================
 -- POLLS
@@ -36,13 +22,12 @@ CREATE TABLE polls (
     updated_at TIMESTAMPTZ DEFAULT NOW(),
     closed_at TIMESTAMPTZ,
     auto_delete_at TIMESTAMPTZ,
-    admin_id UUID REFERENCES admins(id) ON DELETE SET NULL,
+    created_by UUID,  -- hub person id of the instructor or TA who created it
 
     CONSTRAINT valid_slug CHECK (slug IS NULL OR slug ~ '^[a-z0-9-]+$')
 );
 
 CREATE INDEX idx_polls_state ON polls(state);
-CREATE INDEX idx_polls_admin_id ON polls(admin_id);
 CREATE INDEX idx_polls_auto_delete ON polls(auto_delete_at) WHERE auto_delete_at IS NOT NULL;
 
 -- ============================================
@@ -79,15 +64,17 @@ CREATE TABLE answer_options (
 CREATE INDEX idx_answer_options_question_id ON answer_options(question_id);
 
 -- ============================================
--- PARTICIPANT SESSIONS (anonymous voters)
+-- PARTICIPANT SESSIONS (one per signed-in student per poll)
 -- ============================================
 CREATE TABLE sessions (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     poll_id UUID NOT NULL REFERENCES polls(id) ON DELETE CASCADE,
-    session_token VARCHAR(64) NOT NULL UNIQUE,
+    student_id UUID,  -- hub person id
     created_at TIMESTAMPTZ DEFAULT NOW(),
     last_activity_at TIMESTAMPTZ DEFAULT NOW()
 );
+
+CREATE UNIQUE INDEX sessions_poll_student_key ON sessions (poll_id, student_id);
 
 CREATE INDEX idx_sessions_activity ON sessions(poll_id, last_activity_at);
 
@@ -187,7 +174,16 @@ CREATE TRIGGER responses_update_session
     FOR EACH ROW EXECUTE FUNCTION update_session_activity();
 
 -- ============================================
--- SEED: superadmin
+-- CLASS HUB ACTIVITY REPORTS (held until the hub has them; kit: OUTBOX_TABLE_SQL)
 -- ============================================
-INSERT INTO admins (email, name, affiliation, role, status, approved_at)
-VALUES ('djw2104@columbia.edu', 'Dan Wang', 'Columbia Business School', 'superadmin', 'approved', NOW());
+CREATE TABLE IF NOT EXISTS hub_outbox (
+  id               UUID PRIMARY KEY,
+  created_at       TIMESTAMPTZ NOT NULL DEFAULT now(),
+  event            JSON NOT NULL,          -- the report as sent (JSON keeps the snapshot's field order)
+  attempts         INTEGER NOT NULL DEFAULT 0,
+  last_attempt_at  TIMESTAMPTZ,
+  last_error       TEXT,
+  delivered_at     TIMESTAMPTZ,
+  failed_at        TIMESTAMPTZ             -- rejected by the hub as malformed; not retried
+);
+CREATE INDEX IF NOT EXISTS hub_outbox_pending ON hub_outbox (created_at) WHERE delivered_at IS NULL AND failed_at IS NULL;

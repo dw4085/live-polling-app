@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, useCallback } from 'react';
 import { useParams } from 'react-router-dom';
 import { useSession } from '../../contexts/SessionContext';
+import { useUser } from '../../contexts/UserContext';
 import { getLiveState } from '../../services/api';
 import { Loading } from '../common/Loading';
 import { QuestionCard } from './QuestionCard';
@@ -11,6 +12,7 @@ import type { Poll, Question, ResponseCount } from '../../types';
 export function VotingPage() {
   const { code } = useParams<{ code: string }>();
   const { initSession, responses, loading: sessionLoading, refreshResponses } = useSession();
+  const { firstName } = useUser();
 
   const [poll, setPoll] = useState<Poll | null>(null);
   const [questions, setQuestions] = useState<Question[]>([]);
@@ -144,6 +146,9 @@ export function VotingPage() {
 
       {/* Questions */}
       <main className="max-w-2xl mx-auto p-4 pb-24">
+        <p className="text-xs text-gray-500 mb-4">
+          Answering as {firstName}. Your instructor can see your answers; shared results show only totals.
+        </p>
         {visibleQuestions.length === 0 ? (
           <div className="text-center py-16">
             <div className="text-6xl mb-4 animate-pulse">⏳</div>

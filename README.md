@@ -8,15 +8,17 @@ alternative to Poll Everywhere.
 - Create multiple-choice polls with unlimited questions (single answer or "check all that apply")
 - Reveal questions to participants one at a time, and reveal results per question or all at once
 - Live results for a projector, with presentation mode and cross-tabulation of two questions
-- Mobile-optimized, anonymous voting (no login for participants)
-- Multiple admins: anyone can request access with Google; a superadmin approves requests
+- Mobile-optimized voting; students sign in once at the class hub and can change answers until the poll closes
+- Projected results stay aggregate; each student's answers go to the class hub's activity log
+- The class hub's instructors and TAs run polls (no separate admin accounts)
 
 ## Tech Stack
 
 - **Frontend**: React + TypeScript + Vite + Tailwind CSS + Recharts (`frontend/`)
 - **API**: Vercel serverless functions in TypeScript (`api/`)
 - **Database**: Neon Postgres via the `@neondatabase/serverless` HTTP driver
-- **Admin auth**: Neon Auth (Google sign-in) plus a superadmin password
+- **Sign-in**: the class hub (one Google sign-in for every class app; its session cookie is
+  verified with `jose`)
 - **Hosting**: Vercel
 
 The browser never talks to the database: every read and write goes through `api/app.ts`.
@@ -24,14 +26,39 @@ Live updates come from polling (pages refresh poll state every second; the share
 poll-state response is cached at the Vercel CDN for one second, so a full classroom
 costs about one function call per second).
 
+## Sign-in and activity (class hub)
+
+Everyone signs in once, at the class hub. The hub sets a session cookie (an ES256 JWT) on its
+cookie domain, so the app must be served under it (preview: `polls.preview.cbs-tech-strategy.com`).
+
+- **Pages:** `frontend/src/main.tsx` calls `requireUser()` from the browser kit
+  (`frontend/src/lib/hub.ts`, configured by `VITE_HUB_URL` / `VITE_HUB_APP_SLUG`) before rendering;
+  signed-out visitors go to the hub's `/renew` and come back signed in. The hub cookie lasts 24 h
+  and renews silently, so students stay signed in.
+- **API:** `api/_lib/auth.ts` verifies the cookie with the server kit (`api/_lib/hub.ts`) on every
+  request that reads or writes a student's answers (`requireUser`) or runs a poll
+  (`requireStaff`: the hub's instructors and TAs, who share every poll). The API never takes a
+  user id from the request body. Students who open an admin page see "Instructors only".
+- **Voters:** one participant session per student per poll, keyed by `sessions.student_id`
+  (the hub person id).
+- **Activity log:** each student's answers to a poll are one entry in the hub
+  (`poll.answered`, run id `<poll id>:<student id>`), re-reported with all their answers whenever
+  they change one and once more, marked final, when the poll closes (`api/_lib/pollEvents.ts`).
+  Instructors see the answers by name in the hub; the projected results stay aggregate.
+- **Hold and resend:** reports go through the `hub_outbox` table (`api/_lib/outbox.ts`) and are
+  sent after responding; anything the hub didn't receive is resent with the next report, by the
+  daily sweep (`/api/hub/sweep`, Vercel Cron in `vercel.json`, production only, needs
+  `CRON_SECRET`), or by "Send now" on the admin dashboard, which shows how many are waiting.
+
 ## Setup
 
-1. Create a Neon project and run `schema.sql` in the Neon SQL Editor. It seeds the
-   superadmin (`djw2104@columbia.edu`); edit the last statement to use a different one.
-2. In Neon Console → Auth, enable Neon Auth with Google, and add your site's URL
-   (e.g. `https://your-app.vercel.app`) under trusted domains.
-3. Set the environment variables listed in `.env.example` in Vercel.
-4. Deploy (Vercel builds `frontend/` and the functions in `api/` per `vercel.json`).
+1. Create a Neon project and run `schema.sql` in the Neon SQL Editor (an existing database:
+   run `db/hub-migration.sql`).
+2. Create an app key for `pollanywhere` in the hub admin (App keys).
+3. Set the environment variables listed in `.env.example` in Vercel (the `VITE_` ones are read
+   when the frontend is built).
+4. Add the app's domain under the hub's cookie domain and deploy (Vercel builds `frontend/` and
+   the functions in `api/` per `vercel.json`).
 
 ### Run locally
 
@@ -45,17 +72,16 @@ vercel dev                   # serves the frontend and the /api functions
 
 ## Usage
 
-### Admins
+### Instructors and TAs
 
-1. Go to `/admin`. The superadmin can sign in with the password; everyone signs in with Google.
-2. New admins click "Request access", sign in with Google, and wait for a superadmin to approve them.
-3. Create a poll and add questions; set the poll to "Open" and use "Show All" (or the per-question
+1. Go to `/admin` (signed in at the class hub as an instructor or TA).
+2. Create a poll and add questions; set the poll to "Open" and use "Show All" (or the per-question
    eye toggle) to reveal questions to participants.
-4. Share the voting link and project the results link; reveal results when ready.
+3. Share the voting link and project the results link; reveal results when ready.
 
 ### Participants
 
-1. Open the voting link on any device and answer the visible questions
+1. Open the voting link on any device (signed in at the class hub) and answer the visible questions
 2. Answers can be changed until the poll closes
 
 ### Results display
@@ -68,14 +94,13 @@ vercel dev                   # serves the frontend and the /api functions
 
 | Route | Auth | Purpose |
 |---|---|---|
-| `GET /api/live/:code` | public | Poll, questions and revealed counts for the voting/results pages |
-| `GET /api/live/:code/crosstab?q1&q2` | public | Anonymous answers to two revealed questions |
-| `POST /api/sessions`, `GET /api/sessions/:token` | public | Start / restore a participant session |
-| `POST /api/responses` | session token | Replace a participant's answer(s) to one question |
-| `GET /api/admin/me`, `POST /api/admin/login`, `POST /api/admin/logout`, `POST /api/admin/signup` | — | Admin identity |
-| `/api/admin/polls…`, `/api/admin/questions…`, `/api/admin/options…` | approved admin (own polls; superadmin: all) | Poll editing |
-| `/api/admin/admins…` | superadmin | Approve, reject and delete admins |
-| `/api/auth/*` | — | Same-origin proxy to Neon Auth |
+| `GET /api/live/:code` | public (aggregate, CDN-cached 1 s) | Poll, questions and revealed counts for the voting/results pages |
+| `GET /api/live/:code/crosstab?q1&q2` | public (anonymous, CDN-cached 1 s) | Anonymous answers to two revealed questions |
+| `POST /api/sessions`, `GET /api/sessions/mine?poll_id` | signed in | Join a poll / reload your answers |
+| `POST /api/responses` | signed in | Replace your answer(s) to one question |
+| `/api/admin/polls…`, `/api/admin/questions…`, `/api/admin/options…` | instructor or TA | Poll editing |
+| `GET`/`POST /api/admin/hub/outbox` | instructor or TA | Reports waiting for the class hub / Send now |
+| `GET /api/hub/sweep` | `CRON_SECRET` | Daily resend of waiting reports |
 
 ## Project Structure
 
@@ -84,11 +109,13 @@ live-polling-app/
 ├── frontend/           # React application
 │   └── src/
 │       ├── components/ # UI components (admin, voting, results)
-│       ├── contexts/   # Admin identity and participant session
-│       ├── services/   # API client (api.ts) and Neon Auth client (auth.ts)
+│       ├── contexts/   # Signed-in user (from the class hub) and participant session
+│       ├── lib/        # Class hub browser kit (hub.ts)
+│       ├── services/   # API client (api.ts)
 │       └── types/      # TypeScript types
-├── api/                # Vercel functions: app.ts (all data), auth.ts (Neon Auth proxy)
-│   └── _lib/           # db, auth and HTTP helpers
+├── api/                # Vercel function: app.ts (all data)
+│   └── _lib/           # db, class hub kit (hub.ts), auth, outbox, activity reports, HTTP helpers
+├── db/                 # hub-migration.sql for existing databases
 ├── schema.sql          # Database schema
 └── vercel.json         # Build + rewrites
 ```

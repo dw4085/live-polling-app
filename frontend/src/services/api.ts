@@ -1,7 +1,8 @@
-import type { Admin, AdminSignupInput, AnswerOption, Poll, Question, Response, ResponseCount, Session } from '../types';
+import type { AnswerOption, Poll, Question, Response, ResponseCount, Session } from '../types';
 
 // Browser-side wrappers for the PollAnywhere API (api/app.ts). The browser never
-// talks to the database directly.
+// talks to the database directly. Identity is the class hub's session cookie, which the
+// browser sends with every request; the API never takes a user id from the page.
 
 export class ApiError extends Error {
   status: number;
@@ -45,31 +46,20 @@ export async function getCrossTabResponses(code: string, q1: string, q2: string)
   return responses;
 }
 
-export async function createSession(pollId: string): Promise<Session> {
-  const { session } = await post<{ session: Session }>('sessions', { poll_id: pollId });
-  return session;
+export type MyAnswers = { session: Session; responses: Pick<Response, 'question_id' | 'answer_option_id'>[] };
+
+// Join an open poll as the signed-in student; returns your answers so far
+export function joinPoll(pollId: string): Promise<MyAnswers> {
+  return post<MyAnswers>('sessions', { poll_id: pollId });
 }
 
-export function getSession(token: string): Promise<{ session: Session; responses: Pick<Response, 'question_id' | 'answer_option_id'>[] }> {
-  return request(`sessions/${encodeURIComponent(token)}`);
+export function getMyAnswers(pollId: string): Promise<MyAnswers> {
+  return request<MyAnswers>(`sessions/mine?${new URLSearchParams({ poll_id: pollId })}`);
 }
 
-export async function submitAnswers(sessionToken: string, questionId: string, answerOptionIds: string[]): Promise<void> {
-  await post('responses', { session_token: sessionToken, question_id: questionId, answer_option_ids: answerOptionIds });
+export async function submitAnswers(questionId: string, answerOptionIds: string[]): Promise<void> {
+  await post('responses', { question_id: questionId, answer_option_ids: answerOptionIds });
 }
-
-// ---------- Admin identity ----------
-
-export interface Me {
-  admin: Admin | null;
-  email: string | null;
-  signedIn: boolean;
-}
-
-export const getMe = () => request<Me>('admin/me');
-export const passwordLogin = (password: string) => post<{ admin: Admin }>('admin/login', { password });
-export const passwordLogout = () => post('admin/logout');
-export const requestAdminAccess = (input: Omit<AdminSignupInput, 'email'>) => post<{ admin: Admin }>('admin/signup', input);
 
 // ---------- Admin: polls, questions, options ----------
 
@@ -113,22 +103,15 @@ export async function addOption(questionId: string, optionText: string): Promise
 export const updateOption = (optionId: string, optionText: string) => patch(`admin/options/${optionId}`, { option_text: optionText });
 export const deleteOption = (optionId: string) => del(`admin/options/${optionId}`);
 
-// ---------- Superadmin ----------
+// ---------- Class hub activity reports ----------
 
-export interface PollWithQuestionCount extends Poll {
-  question_count: number;
+export interface OutboxStatus {
+  waiting: number;
+  failed: number;
+  oldestWaitingAt: string | null;
+  lastError: string | null;
+  lastDeliveredAt: string | null;
 }
 
-export interface AdminWithPolls extends Admin {
-  polls: PollWithQuestionCount[];
-}
-
-export async function listAdmins(): Promise<AdminWithPolls[]> {
-  return (await request<{ admins: AdminWithPolls[] }>('admin/admins')).admins;
-}
-
-export async function setAdminStatus(adminId: string, status: 'approved' | 'rejected'): Promise<Admin> {
-  return (await patch<{ admin: Admin }>(`admin/admins/${adminId}`, { status })).admin;
-}
-
-export const deleteAdmin = (adminId: string) => del(`admin/admins/${adminId}`);
+export const getOutboxStatus = () => request<OutboxStatus>('admin/hub/outbox');
+export const sendOutboxNow = () => post<{ delivered: number; waiting: number; status: OutboxStatus }>('admin/hub/outbox');

@@ -1,17 +1,16 @@
 import { createContext, useContext, useState, useCallback, type ReactNode } from 'react';
-import { createSession, getSession, submitAnswers } from '../services/api';
+import { getMyAnswers, joinPoll, submitAnswers } from '../services/api';
 import type { Response } from '../types';
 
+// The signed-in student's participation in the poll on screen. The server knows who they are
+// from the class hub's session cookie; this just holds their answers.
 interface SessionContextType {
-  sessionId: string | null;
-  sessionToken: string | null;
+  pollId: string | null;
   responses: Record<string, string | string[]>; // questionId -> answerOptionId or answerOptionIds[]
   loading: boolean;
   initSession: (pollId: string) => Promise<void>;
   saveResponse: (questionId: string, answerOptionId: string) => Promise<void>;
   saveMultiResponse: (questionId: string, answerOptionIds: string[]) => Promise<void>;
-  clearSession: () => void;
-  clearResponses: () => void;
   refreshResponses: () => Promise<void>;
 }
 
@@ -36,64 +35,46 @@ function toResponseMap(rows: Pick<Response, 'question_id' | 'answer_option_id'>[
 }
 
 export function SessionProvider({ children }: { children: ReactNode }) {
-  const [sessionId, setSessionId] = useState<string | null>(null);
-  const [sessionToken, setSessionToken] = useState<string | null>(() => localStorage.getItem('session_token'));
+  const [pollId, setPollId] = useState<string | null>(null);
   const [responses, setResponses] = useState<Record<string, string | string[]>>({});
   const [loading, setLoading] = useState(false);
 
-  const initSession = useCallback(async (pollId: string) => {
+  // Join the poll (one session per student per poll) and restore any earlier answers
+  const initSession = useCallback(async (id: string) => {
     setLoading(true);
     try {
-      // Check for existing session in localStorage
-      const storedToken = localStorage.getItem('session_token');
-      const storedPollId = localStorage.getItem('session_poll_id');
-
-      if (storedToken && storedPollId === pollId) {
-        // Try to restore existing session
-        try {
-          const existing = await getSession(storedToken);
-          if (existing.session.poll_id === pollId) {
-            setSessionId(existing.session.id);
-            setSessionToken(storedToken);
-            setResponses(toResponseMap(existing.responses));
-            return;
-          }
-        } catch {
-          // Session expired or was removed; start a new one
-        }
-      }
-
-      // Create new session (the server issues the token)
-      const session = await createSession(pollId);
-      setSessionId(session.id);
-      setSessionToken(session.session_token);
-      localStorage.setItem('session_token', session.session_token);
-      localStorage.setItem('session_poll_id', pollId);
-      setResponses({});
+      const mine = await joinPoll(id);
+      setPollId(id);
+      setResponses(toResponseMap(mine.responses));
     } catch (error) {
-      console.error('Failed to start session:', error);
+      console.error('Failed to join poll:', error);
     } finally {
       setLoading(false);
     }
   }, []);
 
+  // Reload this student's answers (e.g. after the admin resets the poll)
+  const refreshResponses = useCallback(async () => {
+    if (!pollId) return;
+    try {
+      setResponses(toResponseMap((await getMyAnswers(pollId)).responses));
+    } catch {
+      // Keep current answers on a transient failure
+    }
+  }, [pollId]);
+
   // Save to the server; if it's rejected (e.g. the poll just closed), resync from the server
   const persist = useCallback(async (questionId: string, answerOptionIds: string[]) => {
-    if (!sessionToken) return;
     try {
-      await submitAnswers(sessionToken, questionId, answerOptionIds);
+      await submitAnswers(questionId, answerOptionIds);
     } catch (error) {
       console.error('Failed to save answer:', error);
-      try {
-        setResponses(toResponseMap((await getSession(sessionToken)).responses));
-      } catch {
-        // Leave the optimistic state; the next refresh will correct it
-      }
+      await refreshResponses();
     }
-  }, [sessionToken]);
+  }, [refreshResponses]);
 
   const saveResponse = useCallback(async (questionId: string, answerOptionId: string) => {
-    if (!sessionToken) return;
+    if (!pollId) return;
 
     // Optimistically update UI
     setResponses(prev => ({
@@ -102,10 +83,10 @@ export function SessionProvider({ children }: { children: ReactNode }) {
     }));
 
     await persist(questionId, [answerOptionId]);
-  }, [sessionToken, persist]);
+  }, [pollId, persist]);
 
   const saveMultiResponse = useCallback(async (questionId: string, answerOptionIds: string[]) => {
-    if (!sessionToken) return;
+    if (!pollId) return;
 
     // Optimistically update UI
     setResponses(prev => ({
@@ -114,42 +95,16 @@ export function SessionProvider({ children }: { children: ReactNode }) {
     }));
 
     await persist(questionId, answerOptionIds);
-  }, [sessionToken, persist]);
-
-  const clearSession = useCallback(() => {
-    setSessionId(null);
-    setSessionToken(null);
-    setResponses({});
-    localStorage.removeItem('session_token');
-    localStorage.removeItem('session_poll_id');
-  }, []);
-
-  const clearResponses = useCallback(() => {
-    setResponses({});
-  }, []);
-
-  // Reload this participant's answers (e.g. after the admin resets the poll)
-  const refreshResponses = useCallback(async () => {
-    if (!sessionToken || !sessionId) return;
-    try {
-      const existing = await getSession(sessionToken);
-      setResponses(toResponseMap(existing.responses));
-    } catch {
-      // Keep current answers on a transient failure
-    }
-  }, [sessionToken, sessionId]);
+  }, [pollId, persist]);
 
   return (
     <SessionContext.Provider value={{
-      sessionId,
-      sessionToken,
+      pollId,
       responses,
       loading,
       initSession,
       saveResponse,
       saveMultiResponse,
-      clearSession,
-      clearResponses,
       refreshResponses
     }}>
       {children}

@@ -1,20 +1,3 @@
-// Admin Types
-export type AdminRole = 'admin' | 'superadmin';
-export type AdminStatus = 'pending' | 'approved' | 'rejected';
-
-export interface Admin {
-  id: string;
-  auth_user_id: string | null;
-  email: string;
-  name: string;
-  affiliation: string | null;
-  role: AdminRole;
-  status: AdminStatus;
-  created_at: string;
-  approved_at: string | null;
-  approved_by: string | null;
-}
-
 // Poll Types
 export type PollState = 'draft' | 'open' | 'closed' | 'archived';
 
@@ -32,7 +15,7 @@ export interface Poll {
   updated_at: string;
   closed_at: string | null;
   auto_delete_at: string | null;
-  admin_id: string | null;
+  created_by: string | null; // hub person id of the instructor or TA who created it
 }
 
 export interface Question {
@@ -58,10 +41,10 @@ export interface AnswerOption {
   created_at: string;
 }
 
+// A signed-in student's participation in one poll
 export interface Session {
   id: string;
   poll_id: string;
-  session_token: string;
   created_at: string;
   last_activity_at: string;
 }
@@ -126,20 +109,6 @@ export interface CreateQuestionInput {
 }
 
 export interface SubmitResponseInput {
-  session_token: string;
-  question_id: string;
-  answer_option_id: string;
-}
-
-export interface SubmitMultiResponseInput {
-  session_token: string;
   question_id: string;
   answer_option_ids: string[];
-}
-
-// Admin Signup Input
-export interface AdminSignupInput {
-  email: string;
-  name: string;
-  affiliation?: string;
 }

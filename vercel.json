@@ -4,8 +4,8 @@
   "buildCommand": "cd frontend && npm run build",
   "outputDirectory": "frontend/dist",
   "rewrites": [
-    { "source": "/api/auth/:path*", "destination": "/api/auth?__path=:path*" },
     { "source": "/api/:path*", "destination": "/api/app?__path=:path*" },
     { "source": "/((?!api/).*)", "destination": "/index.html" }
-  ]
+  ],
+  "crons": [{ "path": "/api/hub/sweep", "schedule": "29 9 * * *" }]
 }

@@ -1,55 +1,32 @@
 import { useEffect, useState } from 'react';
 import { useNavigate, Link } from 'react-router-dom';
-import { useAdmin } from '../../contexts/AdminContext';
-import { createPoll, deletePoll, listAdmins, listPolls } from '../../services/api';
+import { useUser } from '../../contexts/UserContext';
+import { hubHomeUrl } from '../../lib/hubLinks';
+import { createPoll, deletePoll, listPolls } from '../../services/api';
 import { Loading } from '../common/Loading';
-import { ManageAdmins } from './ManageAdmins';
+import { HubOutboxPanel } from './HubOutboxPanel';
 import type { Poll } from '../../types';
 
-type Tab = 'polls' | 'admins';
-
 export function AdminDashboard() {
-  const { isAuthenticated, loading: authLoading, admin, isSuperadmin, isPending, logout } = useAdmin();
+  const { user } = useUser();
   const navigate = useNavigate();
-  const [activeTab, setActiveTab] = useState<Tab>('polls');
   const [polls, setPolls] = useState<Poll[]>([]);
   const [loading, setLoading] = useState(true);
   const [showCreateModal, setShowCreateModal] = useState(false);
   const [newPollTitle, setNewPollTitle] = useState('');
   const [creating, setCreating] = useState(false);
-  const [pendingAdminCount, setPendingAdminCount] = useState(0);
 
-  // Redirect if not authenticated or pending
+  // Load polls (instructors and TAs share every poll)
   useEffect(() => {
-    if (!authLoading) {
-      if (!isAuthenticated) {
-        navigate('/admin');
-      } else if (isPending) {
-        navigate('/admin/pending');
-      }
-    }
-  }, [isAuthenticated, authLoading, isPending, navigate]);
-
-  // Load polls (the server returns all polls for a superadmin, otherwise your own)
-  useEffect(() => {
-    if (!isAuthenticated || !admin || isPending) return;
     listPolls()
       .then(setPolls)
       .catch((error) => console.error('Failed to load polls:', error))
       .finally(() => setLoading(false));
-  }, [isAuthenticated, admin, isPending]);
-
-  // Load pending admin count for superadmin
-  useEffect(() => {
-    if (!isSuperadmin) return;
-    listAdmins()
-      .then((admins) => setPendingAdminCount(admins.filter(a => a.status === 'pending').length))
-      .catch((error) => console.error('Failed to load admins:', error));
-  }, [isSuperadmin]);
+  }, []);
 
   const handleCreatePoll = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!newPollTitle.trim() || !admin) return;
+    if (!newPollTitle.trim()) return;
 
     setCreating(true);
     try {
@@ -82,7 +59,7 @@ export function AdminDashboard() {
     }
   };
 
-  if (authLoading || loading) {
+  if (loading) {
     return <Loading />;
   }
 
@@ -97,125 +74,90 @@ export function AdminDashboard() {
           </div>
           <div className="flex items-center gap-4">
             <div className="text-right text-sm">
-              <div className="text-white">{admin?.name}</div>
+              <div className="text-white">{user.name || user.email}</div>
               <div className="text-columbia-blue text-xs">
-                {isSuperadmin ? 'Superadmin' : 'Admin'}
+                {user.role === 'admin' ? 'Instructor' : 'TA'}
               </div>
             </div>
-            <button
-              onClick={async () => { await logout(); navigate('/admin'); }}
+            <a
+              href={hubHomeUrl()}
               className="text-columbia-blue hover:text-white transition-colors"
             >
-              Logout
-            </button>
+              Class hub
+            </a>
           </div>
         </div>
       </header>
 
       {/* Content */}
       <main className="max-w-6xl mx-auto p-6">
-        {/* Tabs (only show if superadmin) */}
-        {isSuperadmin && (
-          <div className="flex mb-6 border-b border-gray-200">
+        <HubOutboxPanel />
+
+        <div className="flex items-center justify-between mb-8">
+          <h2 className="text-2xl font-bold text-gray-900">
+            Polls
+          </h2>
+          <button
+            onClick={() => setShowCreateModal(true)}
+            className="px-6 py-3 bg-navy text-white rounded-lg hover:bg-navy-light transition-colors flex items-center gap-2"
+          >
+            <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
+            </svg>
+            New Poll
+          </button>
+        </div>
+
+        {polls.length === 0 ? (
+          <div className="text-center py-16 bg-white rounded-xl border border-gray-200">
+            <div className="text-6xl mb-4">📊</div>
+            <h3 className="text-xl font-semibold text-gray-900 mb-2">No polls yet</h3>
+            <p className="text-gray-500 mb-6">Create your first poll to get started</p>
             <button
-              onClick={() => setActiveTab('polls')}
-              className={`px-6 py-3 text-sm font-medium border-b-2 transition-colors ${
-                activeTab === 'polls'
-                  ? 'border-navy text-navy'
-                  : 'border-transparent text-gray-500 hover:text-gray-700'
-              }`}
+              onClick={() => setShowCreateModal(true)}
+              className="px-6 py-3 bg-navy text-white rounded-lg hover:bg-navy-light transition-colors"
             >
-              Your Polls
-            </button>
-            <button
-              onClick={() => setActiveTab('admins')}
-              className={`px-6 py-3 text-sm font-medium border-b-2 transition-colors flex items-center gap-2 ${
-                activeTab === 'admins'
-                  ? 'border-navy text-navy'
-                  : 'border-transparent text-gray-500 hover:text-gray-700'
-              }`}
-            >
-              Manage Admins
-              {pendingAdminCount > 0 && (
-                <span className="px-2 py-0.5 text-xs bg-yellow-100 text-yellow-700 rounded-full">
-                  {pendingAdminCount}
-                </span>
-              )}
+              Create Poll
             </button>
           </div>
-        )}
-
-        {activeTab === 'polls' ? (
-          <>
-            <div className="flex items-center justify-between mb-8">
-              <h2 className="text-2xl font-bold text-gray-900">
-                {isSuperadmin ? 'All Polls' : 'Your Polls'}
-              </h2>
-              <button
-                onClick={() => setShowCreateModal(true)}
-                className="px-6 py-3 bg-navy text-white rounded-lg hover:bg-navy-light transition-colors flex items-center gap-2"
+        ) : (
+          <div className="grid gap-4">
+            {polls.map((poll) => (
+              <div
+                key={poll.id}
+                className="bg-white rounded-xl border border-gray-200 p-6 hover:shadow-md transition-shadow"
               >
-                <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
-                </svg>
-                New Poll
-              </button>
-            </div>
-
-            {polls.length === 0 ? (
-              <div className="text-center py-16 bg-white rounded-xl border border-gray-200">
-                <div className="text-6xl mb-4">📊</div>
-                <h3 className="text-xl font-semibold text-gray-900 mb-2">No polls yet</h3>
-                <p className="text-gray-500 mb-6">Create your first poll to get started</p>
-                <button
-                  onClick={() => setShowCreateModal(true)}
-                  className="px-6 py-3 bg-navy text-white rounded-lg hover:bg-navy-light transition-colors"
-                >
-                  Create Poll
-                </button>
-              </div>
-            ) : (
-              <div className="grid gap-4">
-                {polls.map((poll) => (
-                  <div
-                    key={poll.id}
-                    className="bg-white rounded-xl border border-gray-200 p-6 hover:shadow-md transition-shadow"
-                  >
-                    <div className="flex items-center justify-between">
-                      <div className="flex-1">
-                        <div className="flex items-center gap-3 mb-2">
-                          <h3 className="text-lg font-semibold text-gray-900">{poll.title}</h3>
-                          <span className={`px-2 py-1 rounded-full text-xs font-medium ${getStateColor(poll.state)}`}>
-                            {poll.state}
-                          </span>
-                        </div>
-                        <div className="flex items-center gap-4 text-sm text-gray-500">
-                          <span>Code: <code className="bg-gray-100 px-2 py-0.5 rounded">{poll.access_code}</code></span>
-                          {poll.slug && <span>Slug: <code className="bg-gray-100 px-2 py-0.5 rounded">{poll.slug}</code></span>}
-                        </div>
-                      </div>
-                      <div className="flex items-center gap-3">
-                        <Link
-                          to={`/admin/poll/${poll.id}`}
-                          className="px-4 py-2 bg-columbia-blue text-navy rounded-lg hover:bg-columbia-blue-dark transition-colors"
-                        >
-                          Edit
-                        </Link>
-                        <button
-                          onClick={() => handleDeletePoll(poll.id)}
-                          className="px-4 py-2 text-red-600 hover:bg-red-50 rounded-lg transition-colors"
-                        >
-                          Delete
-                        </button>
-                      </div>
+                <div className="flex items-center justify-between">
+                  <div className="flex-1">
+                    <div className="flex items-center gap-3 mb-2">
+                      <h3 className="text-lg font-semibold text-gray-900">{poll.title}</h3>
+                      <span className={`px-2 py-1 rounded-full text-xs font-medium ${getStateColor(poll.state)}`}>
+                        {poll.state}
+                      </span>
+                    </div>
+                    <div className="flex items-center gap-4 text-sm text-gray-500">
+                      <span>Code: <code className="bg-gray-100 px-2 py-0.5 rounded">{poll.access_code}</code></span>
+                      {poll.slug && <span>Slug: <code className="bg-gray-100 px-2 py-0.5 rounded">{poll.slug}</code></span>}
                     </div>
                   </div>
-                ))}
+                  <div className="flex items-center gap-3">
+                    <Link
+                      to={`/admin/poll/${poll.id}`}
+                      className="px-4 py-2 bg-columbia-blue text-navy rounded-lg hover:bg-columbia-blue-dark transition-colors"
+                    >
+                      Edit
+                    </Link>
+                    <button
+                      onClick={() => handleDeletePoll(poll.id)}
+                      className="px-4 py-2 text-red-600 hover:bg-red-50 rounded-lg transition-colors"
+                    >
+                      Delete
+                    </button>
+                  </div>
+                </div>
               </div>
-            )}
-          </>
-        ) : (
-          <ManageAdmins />
+            ))}
+          </div>
         )}
       </main>
 

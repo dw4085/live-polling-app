@@ -1,18 +1,19 @@
-import { randomBytes, randomInt } from 'node:crypto';
-import {
-  checkSuperadminPassword,
-  clearSuperadminCookie,
-  getIdentity,
-  requireApprovedAdmin,
-  requireSuperadmin,
-  superadminCookie,
-  type Admin,
-} from './_lib/auth.js';
+import { randomInt } from 'node:crypto';
+import { waitUntil } from '@vercel/functions';
+import { requireStaff, requireUser } from './_lib/auth.js';
 import { db } from './_lib/db.js';
+import { isCronRequest, type HubEvent } from './_lib/hub.js';
 import { HttpError, json, readBody, routePath, text, uuid } from './_lib/http.js';
+import { flushSoon, outbox } from './_lib/outbox.js';
+import { appOrigin, finalAnswersEvents, studentAnswersEvent } from './_lib/pollEvents.js';
 
 // All PollAnywhere data access goes through this function (the browser never
-// talks to the database). vercel.json rewrites /api/:path* here, except /api/auth/*.
+// talks to the database). vercel.json rewrites /api/:path* here.
+//
+// Identity comes only from the class hub's session cookie (see _lib/auth.ts): voting needs a
+// signed-in student, and the hub's instructors and TAs run every poll. The live poll state and
+// cross-tab data stay public and anonymous (aggregate counts only) so the CDN can serve a full
+// classroom polling every second.
 
 type Params = Record<string, string>;
 type Handler = (ctx: { request: Request; url: URL; params: Params }) => Promise<Response>;
@@ -74,35 +75,33 @@ async function pollByCode(code: string) {
   return poll;
 }
 
-function canManage(admin: Admin, poll: { admin_id: string | null }) {
-  return admin.role === 'superadmin' || poll.admin_id === admin.id;
-}
-
-async function managedPoll(admin: Admin, pollId: string) {
+async function managedPoll(pollId: string) {
   const [poll] = await db()`SELECT * FROM polls WHERE id = ${pollId}`;
   if (!poll) throw new HttpError(404, 'Poll not found');
-  if (!canManage(admin, poll as { admin_id: string | null })) throw new HttpError(403, 'Not your poll');
   return poll;
 }
 
-async function managedQuestion(admin: Admin, questionId: string) {
-  const [row] = await db()`
-    SELECT q.id, q.poll_id, p.admin_id FROM questions q JOIN polls p ON p.id = q.poll_id
-    WHERE q.id = ${questionId}`;
+async function managedQuestion(questionId: string) {
+  const [row] = await db()`SELECT id, poll_id FROM questions WHERE id = ${questionId}`;
   if (!row) throw new HttpError(404, 'Question not found');
-  if (!canManage(admin, row as { admin_id: string | null })) throw new HttpError(403, 'Not your poll');
   return row;
 }
 
-async function managedOption(admin: Admin, optionId: string) {
-  const [row] = await db()`
-    SELECT ao.id, p.admin_id FROM answer_options ao
-    JOIN questions q ON q.id = ao.question_id
-    JOIN polls p ON p.id = q.poll_id
-    WHERE ao.id = ${optionId}`;
+async function managedOption(optionId: string) {
+  const [row] = await db()`SELECT id FROM answer_options WHERE id = ${optionId}`;
   if (!row) throw new HttpError(404, 'Option not found');
-  if (!canManage(admin, row as { admin_id: string | null })) throw new HttpError(403, 'Not your poll');
   return row;
+}
+
+// Hold activity reports for the class hub and send them after responding. Reporting never holds
+// up or fails a vote or a poll change: the answers are saved either way.
+async function report(build: () => Promise<HubEvent[]>) {
+  try {
+    await outbox().enqueue(...(await build()));
+    waitUntil(flushSoon());
+  } catch (error) {
+    console.error('[hub] could not hold activity report', error);
+  }
 }
 
 // ---------- Public: participants and projector ----------
@@ -140,45 +139,58 @@ route('GET', 'live/:code/crosstab', async ({ params, url }) => {
   return json({ responses }, 200, LIVE_CACHE);
 });
 
-// Start an anonymous participant session for an open poll
+// A participant session's answers
+function answersOf(sessionId: string) {
+  return db()`
+    SELECT question_id, answer_option_id FROM responses WHERE session_id = ${sessionId}
+    ORDER BY submitted_at`;
+}
+
+// Join an open poll as the signed-in student (one session per student per poll); returns your answers so far
 route('POST', 'sessions', async ({ request }) => {
+  const user = await requireUser(request);
   const body = await readBody(request);
   const pollId = uuid(body.poll_id, 'poll_id');
-  const token = randomBytes(24).toString('base64url');
   const [session] = await db()`
-    INSERT INTO sessions (poll_id, session_token)
-    SELECT id, ${token} FROM polls WHERE id = ${pollId} AND state = 'open'
-    RETURNING *`;
+    INSERT INTO sessions (poll_id, student_id)
+    SELECT id, ${user.id} FROM polls WHERE id = ${pollId} AND state = 'open'
+    ON CONFLICT (poll_id, student_id) DO UPDATE SET last_activity_at = NOW()
+    RETURNING id, poll_id, created_at, last_activity_at`;
   if (!session) throw new HttpError(409, 'Poll is not open');
-  return json({ session });
+  return json({ session, responses: await answersOf(session.id) });
 });
 
-// Restore a participant session and its answers
-route('GET', 'sessions/:token', async ({ params }) => {
-  const [session] = await db()`SELECT * FROM sessions WHERE session_token = ${params.token}`;
+// The signed-in student's answers to a poll (e.g. reloaded after the admin resets it)
+route('GET', 'sessions/mine', async ({ request, url }) => {
+  const user = await requireUser(request);
+  const pollId = uuid(url.searchParams.get('poll_id'), 'poll_id');
+  const [session] = await db()`
+    SELECT id, poll_id, created_at, last_activity_at FROM sessions
+    WHERE poll_id = ${pollId} AND student_id = ${user.id}`;
   if (!session) throw new HttpError(404, 'Session not found');
-  const responses = await db()`
-    SELECT question_id, answer_option_id FROM responses WHERE session_id = ${session.id}
-    ORDER BY submitted_at`;
-  return json({ session, responses });
+  return json({ session, responses: await answersOf(session.id) });
 });
 
-// Replace a participant's answer(s) to one question
+// Replace the signed-in student's answer(s) to one question
 route('POST', 'responses', async ({ request }) => {
+  const user = await requireUser(request);
   const body = await readBody(request);
-  if (typeof body.session_token !== 'string' || !body.session_token) throw new HttpError(400, 'Invalid session_token');
   const questionId = uuid(body.question_id, 'question_id');
   if (!Array.isArray(body.answer_option_ids)) throw new HttpError(400, 'answer_option_ids must be an array');
-  const optionIds = [...new Set(body.answer_option_ids.map((id) => uuid(id, 'answer_option_id')))];
+  const optionIds = [...new Set(body.answer_option_ids.map((id) => uuid(id, 'answer_option_id').toLowerCase()))];
 
   const sql = db();
   const [ctx] = await sql`
-    SELECT s.id AS session_id, p.state, q.is_visible, q.allow_multiple
-    FROM sessions s
-    JOIN polls p ON p.id = s.poll_id
-    JOIN questions q ON q.poll_id = p.id AND q.id = ${questionId}
-    WHERE s.session_token = ${body.session_token}`;
-  if (!ctx) throw new HttpError(404, 'Session or question not found');
+    SELECT p.id AS poll_id, p.state, q.is_visible, q.allow_multiple, s.id AS session_id,
+      ARRAY(
+        SELECT r.answer_option_id::text FROM responses r
+        WHERE r.session_id = s.id AND r.question_id = q.id
+      ) AS previous
+    FROM questions q
+    JOIN polls p ON p.id = q.poll_id
+    LEFT JOIN sessions s ON s.poll_id = p.id AND s.student_id = ${user.id}
+    WHERE q.id = ${questionId}`;
+  if (!ctx) throw new HttpError(404, 'Question not found');
   if (ctx.state !== 'open') throw new HttpError(409, 'Poll is not open');
   if (!ctx.is_visible) throw new HttpError(409, 'Question is not open for answers');
   if (!ctx.allow_multiple && optionIds.length > 1) throw new HttpError(400, 'Only one answer allowed');
@@ -190,77 +202,54 @@ route('POST', 'responses', async ({ request }) => {
     if (count !== optionIds.length) throw new HttpError(400, 'Unknown answer option');
   }
 
+  // The same answer as before: nothing to save or report
+  const previous = new Set(ctx.previous as string[]);
+  if (ctx.session_id && previous.size === optionIds.length && optionIds.every((id) => previous.has(id))) {
+    return json({ ok: true });
+  }
+
+  let sessionId = ctx.session_id as string | null;
+  if (!sessionId) {
+    const [session] = await sql`
+      INSERT INTO sessions (poll_id, student_id) VALUES (${ctx.poll_id}, ${user.id})
+      ON CONFLICT (poll_id, student_id) DO UPDATE SET last_activity_at = NOW()
+      RETURNING id`;
+    sessionId = session.id as string;
+  }
+
   await sql.transaction([
-    sql`DELETE FROM responses WHERE session_id = ${ctx.session_id} AND question_id = ${questionId}`,
+    sql`DELETE FROM responses WHERE session_id = ${sessionId} AND question_id = ${questionId}`,
     sql`
       INSERT INTO responses (session_id, question_id, answer_option_id)
-      SELECT ${ctx.session_id}, ${questionId}, unnest(${optionIds}::uuid[])`,
+      SELECT ${sessionId}, ${questionId}, unnest(${optionIds}::uuid[])`,
   ]);
+
+  // Re-report the student's whole set of answers to this poll (one hub entry per student per poll)
+  await report(async () => [await studentAnswersEvent(ctx.poll_id, user.id, appOrigin(request))]);
   return json({ ok: true });
-});
-
-// ---------- Admin identity ----------
-
-route('GET', 'admin/me', async ({ request }) => {
-  const { authUser, admin } = await getIdentity(request);
-  return json({ admin, email: authUser?.email ?? admin?.email ?? null, signedIn: Boolean(authUser || admin) });
-});
-
-route('POST', 'admin/login', async ({ request, url }) => {
-  const body = await readBody(request);
-  if (typeof body.password !== 'string' || !checkSuperadminPassword(body.password)) {
-    throw new HttpError(401, 'Incorrect password');
-  }
-  const [admin] = await db()`SELECT * FROM admins WHERE role = 'superadmin' ORDER BY created_at LIMIT 1`;
-  if (!admin) throw new HttpError(500, 'Superadmin record not found');
-  return json({ admin }, 200, { 'set-cookie': superadminCookie(url.protocol === 'https:') });
-});
-
-route('POST', 'admin/logout', async ({ url }) => {
-  return json({ ok: true }, 200, { 'set-cookie': clearSuperadminCookie(url.protocol === 'https:') });
-});
-
-// Request admin access for the signed-in (Google) account
-route('POST', 'admin/signup', async ({ request }) => {
-  const { authUser, admin } = await getIdentity(request);
-  if (!authUser) throw new HttpError(401, 'Sign in with Google first');
-  if (admin) {
-    throw new HttpError(409, admin.status === 'pending'
-      ? 'An account with this email is already pending approval.'
-      : 'An account with this email already exists.');
-  }
-  const body = await readBody(request);
-  const name = text(body.name, 'Name', 255);
-  const affiliation = typeof body.affiliation === 'string' && body.affiliation.trim()
-    ? text(body.affiliation, 'Affiliation', 500) : null;
-  const [created] = await db()`
-    INSERT INTO admins (auth_user_id, email, name, affiliation, role, status)
-    VALUES (${authUser.id}, ${authUser.email}, ${name}, ${affiliation}, 'admin', 'pending')
-    RETURNING *`;
-  return json({ admin: created });
 });
 
 // ---------- Admin: polls ----------
 
+// The hub's instructors and TAs share every poll
 route('GET', 'admin/polls', async ({ request }) => {
-  const admin = await requireApprovedAdmin(request);
-  const superadmin = admin.role === 'superadmin';
+  await requireStaff(request);
   const polls = await db()`
     SELECT * FROM polls
-    WHERE state <> 'archived' AND (${superadmin}::boolean OR admin_id = ${admin.id})
+    WHERE state <> 'archived'
     ORDER BY created_at DESC`;
   return json({ polls });
 });
 
 route('POST', 'admin/polls', async ({ request }) => {
-  const admin = await requireApprovedAdmin(request);
+  const user = await requireStaff(request);
   const body = await readBody(request);
   const title = text(body.title, 'Title', 255);
   for (let attempt = 0; attempt < 5; attempt++) {
     const code = Array.from({ length: 8 }, () => CODE_CHARS[randomInt(CODE_CHARS.length)]).join('');
     const [poll] = await db()`
-      INSERT INTO polls (title, access_code, state, admin_id)
-      VALUES (${title}, ${code}, 'draft', ${admin.id})
+      INSERT INTO polls (title, access_code, state, created_by)
+      VALUES (${title}, ${code}, 'draft', ${user.id})
       ON CONFLICT (access_code) DO NOTHING
       RETURNING *`;
     if (poll) return json({ poll });
@@ -269,8 +258,8 @@ route('POST', 'admin/polls', async ({ request }) => {
 });
 
 route('GET', 'admin/polls/:id', async ({ request, params }) => {
-  const admin = await requireApprovedAdmin(request);
-  const poll = await managedPoll(admin, uuid(params.id));
+  await requireStaff(request);
+  const poll = await managedPoll(uuid(params.id));
   const [questions, participants] = await db().transaction([
     questionsQuery(poll.id),
     db()`SELECT participant_count FROM active_participants WHERE poll_id = ${poll.id}`,
@@ -279,8 +268,8 @@ route('GET', 'admin/polls/:id', async ({ request, params }) => {
 });
 
 route('PATCH', 'admin/polls/:id', async ({ request, params }) => {
-  const admin = await requireApprovedAdmin(request);
-  const poll = await managedPoll(admin, uuid(params.id));
+  await requireStaff(request);
+  const poll = await managedPoll(uuid(params.id));
   const body = await readBody(request);
   const title = body.title === undefined ? null : text(body.title, 'Title', 255);
   const state = optionalEnum(body.state, POLL_STATES, 'state');
@@ -292,27 +281,31 @@ route('PATCH', 'admin/polls/:id', async ({ request, params }) => {
       results_revealed = COALESCE(${revealed}::boolean, results_revealed)
     WHERE id = ${poll.id}
     RETURNING *`;
+  // Closing the poll makes everyone's answers final: re-report each student's entry, marked final
+  if (updated.state === 'closed' && poll.state !== 'closed') {
+    await report(() => finalAnswersEvents(poll.id, appOrigin(request)));
+  }
   return json({ poll: updated });
 });
 
 route('DELETE', 'admin/polls/:id', async ({ request, params }) => {
-  const admin = await requireApprovedAdmin(request);
-  const poll = await managedPoll(admin, uuid(params.id));
+  await requireStaff(request);
+  const poll = await managedPoll(uuid(params.id));
   await db()`DELETE FROM polls WHERE id = ${poll.id}`;
   return json({ ok: true });
 });
 
 route('GET', 'admin/polls/:id/participants', async ({ request, params }) => {
-  const admin = await requireApprovedAdmin(request);
-  const poll = await managedPoll(admin, uuid(params.id));
+  await requireStaff(request);
+  const poll = await managedPoll(uuid(params.id));
   const [row] = await db()`SELECT participant_count FROM active_participants WHERE poll_id = ${poll.id}`;
   return json({ participant_count: row?.participant_count ?? 0 });
 });
 
 // Clear every answer to this poll. Bumping updated_at tells open voting pages to reload their answers.
 route('POST', 'admin/polls/:id/reset', async ({ request, params }) => {
-  const admin = await requireApprovedAdmin(request);
-  const poll = await managedPoll(admin, uuid(params.id));
+  await requireStaff(request);
+  const poll = await managedPoll(uuid(params.id));
   const sql = db();
   await sql.transaction([
     sql`DELETE FROM responses WHERE question_id IN (SELECT id FROM questions WHERE poll_id = ${poll.id})`,
@@ -323,8 +316,8 @@ route('POST', 'admin/polls/:id/reset', async ({ request, params }) => {
 
 // Show or hide every question to participants
 route('POST', 'admin/polls/:id/visibility', async ({ request, params }) => {
-  const admin = await requireApprovedAdmin(request);
-  const poll = await managedPoll(admin, uuid(params.id));
+  await requireStaff(request);
+  const poll = await managedPoll(uuid(params.id));
   const body = await readBody(request);
   const visible = optionalBool(body.visible, 'visible');
   if (visible === null) throw new HttpError(400, 'visible is required');
@@ -334,8 +327,8 @@ route('POST', 'admin/polls/:id/visibility', async ({ request, params }) => {
 
 // Add a question (with two starter options); returns the updated question list
 route('POST', 'admin/polls/:id/questions', async ({ request, params }) => {
-  const admin = await requireApprovedAdmin(request);
-  const poll = await managedPoll(admin, uuid(params.id));
+  await requireStaff(request);
+  const poll = await managedPoll(uuid(params.id));
   await db()`
     WITH q AS (
       INSERT INTO questions (poll_id, question_text, question_order, chart_type)
@@ -353,8 +346,8 @@ route('POST', 'admin/polls/:id/questions', async ({ request, params }) => {
 // ---------- Admin: questions and options ----------
 
 route('PATCH', 'admin/questions/:id', async ({ request, params }) => {
-  const admin = await requireApprovedAdmin(request);
-  const question = await managedQuestion(admin, uuid(params.id));
+  await requireStaff(request);
+  const question = await managedQuestion(uuid(params.id));
   const body = await readBody(request);
   const questionText = body.question_text === undefined ? null : text(body.question_text, 'Question text', 5000);
   const chartType = optionalEnum(body.chart_type, CHART_TYPES, 'chart_type');
@@ -374,15 +367,15 @@ route('PATCH', 'admin/questions/:id', async ({ request, params }) => {
 });
 
 route('DELETE', 'admin/questions/:id', async ({ request, params }) => {
-  const admin = await requireApprovedAdmin(request);
-  const question = await managedQuestion(admin, uuid(params.id));
+  await requireStaff(request);
+  const question = await managedQuestion(uuid(params.id));
   await db()`DELETE FROM questions WHERE id = ${question.id}`;
   return json({ ok: true });
 });
 
 route('POST', 'admin/questions/:id/options', async ({ request, params }) => {
-  const admin = await requireApprovedAdmin(request);
-  const question = await managedQuestion(admin, uuid(params.id));
+  await requireStaff(request);
+  const question = await managedQuestion(uuid(params.id));
   const body = await readBody(request);
   const optionText = text(body.option_text, 'Option text', 500);
   const [option] = await db()`
@@ -394,8 +387,8 @@ route('POST', 'admin/questions/:id/options', async ({ request, params }) => {
 });
 
 route('PATCH', 'admin/options/:id', async ({ request, params }) => {
-  const admin = await requireApprovedAdmin(request);
-  const option = await managedOption(admin, uuid(params.id));
+  await requireStaff(request);
+  const option = await managedOption(uuid(params.id));
   const body = await readBody(request);
   const optionText = text(body.option_text, 'Option text', 500);
   const [updated] = await db()`
@@ -404,54 +397,31 @@ route('PATCH', 'admin/options/:id', async ({ request, params }) => {
 });
 
 route('DELETE', 'admin/options/:id', async ({ request, params }) => {
-  const admin = await requireApprovedAdmin(request);
-  const option = await managedOption(admin, uuid(params.id));
+  await requireStaff(request);
+  const option = await managedOption(uuid(params.id));
   await db()`DELETE FROM answer_options WHERE id = ${option.id}`;
   return json({ ok: true });
 });
 
-// ---------- Superadmin: admin accounts ----------
+// ---------- Class hub activity reports ----------
 
-route('GET', 'admin/admins', async ({ request }) => {
-  await requireSuperadmin(request);
-  const [admins, polls] = await db().transaction([
-    db()`SELECT * FROM admins ORDER BY created_at DESC`,
-    db()`
-      SELECT p.*, (SELECT COUNT(*)::int FROM questions q WHERE q.poll_id = p.id) AS question_count
-      FROM polls p
-      WHERE p.state <> 'archived' AND p.admin_id IS NOT NULL
-      ORDER BY p.created_at DESC`,
-  ]);
-  const byAdmin: Record<string, unknown[]> = {};
-  for (const poll of polls) (byAdmin[poll.admin_id] ??= []).push(poll);
-  return json({ admins: admins.map((a) => ({ ...a, polls: byAdmin[a.id] ?? [] })) });
+// Reports the class hub hasn't received yet (admin page)
+route('GET', 'admin/hub/outbox', async ({ request }) => {
+  await requireStaff(request);
+  return json(await outbox().status());
 });
 
-route('PATCH', 'admin/admins/:id', async ({ request, params }) => {
-  const me = await requireSuperadmin(request);
-  const id = uuid(params.id);
-  if (id === me.id) throw new HttpError(400, 'You cannot change your own account');
-  const body = await readBody(request);
-  const status = optionalEnum(body.status, ['approved', 'rejected'], 'status');
-  if (!status) throw new HttpError(400, 'status is required');
-  const [updated] = await db()`
-    UPDATE admins SET
-      status = ${status},
-      approved_at = CASE WHEN ${status} = 'approved' THEN NOW() ELSE approved_at END,
-      approved_by = CASE WHEN ${status} = 'approved' THEN ${me.id}::uuid ELSE approved_by END
-    WHERE id = ${id} AND role <> 'superadmin'
-    RETURNING *`;
-  if (!updated) throw new HttpError(404, 'Admin not found');
-  return json({ admin: updated });
+// "Send now": deliver everything waiting, then report what's left
+route('POST', 'admin/hub/outbox', async ({ request }) => {
+  await requireStaff(request);
+  const result = await outbox().flush();
+  return json({ ...result, status: await outbox().status() });
 });
 
-route('DELETE', 'admin/admins/:id', async ({ request, params }) => {
-  const me = await requireSuperadmin(request);
-  const id = uuid(params.id);
-  if (id === me.id) throw new HttpError(400, 'You cannot delete your own account');
-  const [deleted] = await db()`DELETE FROM admins WHERE id = ${id} AND role <> 'superadmin' RETURNING id`;
-  if (!deleted) throw new HttpError(404, 'Admin not found');
-  return json({ ok: true });
+// Daily sweep (Vercel Cron, see vercel.json): resend reports the hub hasn't received
+route('GET', 'hub/sweep', async ({ request }) => {
+  if (!isCronRequest(request.headers.get('authorization'))) throw new HttpError(401, 'Unauthorized');
+  return json(await outbox().flush());
 });
 
 // ---------- Dispatch ----------

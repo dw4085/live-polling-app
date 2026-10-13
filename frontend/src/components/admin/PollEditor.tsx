@@ -1,6 +1,5 @@
 import { useEffect, useState } from 'react';
 import { useParams, useNavigate, Link } from 'react-router-dom';
-import { useAdmin } from '../../contexts/AdminContext';
 import {
   addQuestion,
   deleteQuestion,
@@ -18,7 +17,6 @@ import type { Poll, Question } from '../../types';
 
 export function PollEditor() {
   const { pollId } = useParams<{ pollId: string }>();
-  const { isAuthenticated, loading: authLoading } = useAdmin();
   const navigate = useNavigate();
 
   const [poll, setPoll] = useState<Poll | null>(null);
@@ -27,13 +25,6 @@ export function PollEditor() {
   const [participantCount, setParticipantCount] = useState(0);
   const [editingTitle, setEditingTitle] = useState(false);
   const [titleInput, setTitleInput] = useState('');
-
-  // Redirect if not authenticated
-  useEffect(() => {
-    if (!authLoading && !isAuthenticated) {
-      navigate('/admin');
-    }
-  }, [isAuthenticated, authLoading, navigate]);
 
   // Load poll data
   useEffect(() => {
@@ -48,18 +39,16 @@ export function PollEditor() {
         setParticipantCount(data.participant_count);
         setLoading(false);
       } catch {
-        navigate('/admin/dashboard');
+        navigate('/admin');
       }
     }
 
-    if (isAuthenticated) {
-      loadPoll();
-    }
-  }, [pollId, isAuthenticated, navigate]);
+    loadPoll();
+  }, [pollId, navigate]);
 
   // Refresh participant count periodically
   useEffect(() => {
-    if (!pollId || !isAuthenticated) return;
+    if (!pollId) return;
 
     const interval = setInterval(async () => {
       try {
@@ -70,7 +59,7 @@ export function PollEditor() {
     }, 5000);
 
     return () => clearInterval(interval);
-  }, [pollId, isAuthenticated]);
+  }, [pollId]);
 
   // Runs an edit; surfaces failures instead of silently diverging from the server
   async function attempt(action: () => Promise<void>) {
@@ -147,7 +136,7 @@ export function PollEditor() {
   const votingUrl = poll ? `${window.location.origin}/vote/${poll.slug || poll.access_code}` : '';
   const resultsUrl = poll ? `${window.location.origin}/results/${poll.slug || poll.access_code}` : '';
 
-  if (authLoading || loading) {
+  if (loading) {
     return <Loading />;
   }
 
@@ -161,7 +150,7 @@ export function PollEditor() {
       <header className="bg-navy text-white py-4 px-6 shadow-lg">
         <div className="max-w-6xl mx-auto flex items-center justify-between">
           <div className="flex items-center gap-4">
-            <Link to="/admin/dashboard" className="text-columbia-blue hover:text-white flex items-center gap-2">
+            <Link to="/admin" className="text-columbia-blue hover:text-white flex items-center gap-2">
               <span>←</span>
               <span className="font-medium">PollAnywhere</span>
             </Link>
