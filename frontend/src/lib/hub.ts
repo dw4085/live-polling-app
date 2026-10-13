@@ -67,8 +67,10 @@ export function initHub(options: { hubUrl?: string; appSlug?: string } = {}) {
   const appSlug = options.appSlug ?? env.VITE_HUB_APP_SLUG ?? '';
   if (!hubUrl || !appSlug) throw new Error('Set VITE_HUB_URL and VITE_HUB_APP_SLUG');
   cfg = { hubUrl, appSlug };
+  // Leaving the page: queue any pending idle snapshot without starting a normal send (which the
+  // browser would cancel), then send everything with keepalive so it survives the unload.
   const sendPending = () => {
-    flushIdle();
+    flushIdle(false);
     void flush(true);
   };
   window.addEventListener('pagehide', sendPending);
@@ -108,6 +110,11 @@ export async function requireUser(): Promise<HubUser> {
 
 // Report an event (held until the hub has it).
 export function logEvent(e: HubEvent): void {
+  enqueue(e);
+  void flush();
+}
+
+function enqueue(e: HubEvent): void {
   const items = readOutbox();
   items.push({
     app_slug: config().appSlug,
@@ -120,14 +127,15 @@ export function logEvent(e: HubEvent): void {
     event_key: crypto.randomUUID(),
   });
   writeOutbox(items);
-  void flush();
 }
 
 let flushing: Promise<void> | null = null;
 
 // Send everything held, oldest first. Never throws.
 export function flush(keepalive = false): Promise<void> {
-  if (flushing) return flushing;
+  // A keepalive send (page unloading) doesn't wait for one in flight, which the browser may cancel;
+  // anything sent twice is recorded once (event_key).
+  if (flushing && !keepalive) return flushing;
   const run = (async () => {
     {
       for (let round = 0; round < 5; round++) {
@@ -176,10 +184,10 @@ let lastIdleSnapshot = '';
 export function logWhenIdle(build: () => HubEvent, delayMs = 20_000): void {
   idleBuild = build;
   if (idleTimer) clearTimeout(idleTimer);
-  idleTimer = setTimeout(flushIdle, delayMs);
+  idleTimer = setTimeout(() => flushIdle(), delayMs);
 }
 
-function flushIdle() {
+function flushIdle(send = true) {
   if (idleTimer) clearTimeout(idleTimer);
   idleTimer = null;
   if (!idleBuild) return;
@@ -188,5 +196,6 @@ function flushIdle() {
   const key = JSON.stringify([event.type, event.title, event.snapshot]);
   if (key === lastIdleSnapshot) return;
   lastIdleSnapshot = key;
-  logEvent(event);
+  if (send) logEvent(event);
+  else enqueue(event);
 }
